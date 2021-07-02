@@ -1,0 +1,112 @@
+/*
+ * Assumes gradle 4.x to build.
+ */
+
+plugins {
+  id 'java'
+  id 'com.github.johnrengelman.shadow' version '4.0.2'
+}
+
+// Apply the java plugin to add support for Java
+apply plugin: 'java'
+apply plugin: 'application'
+apply plugin: 'com.github.johnrengelman.shadow'
+apply from: 'gradle/swt.gradle'
+
+mainClassName = 'com.pairtradinglab.ptltrader.Application'
+
+// In this section you declare where to find the dependencies of your project
+repositories {
+    mavenCentral()
+
+    maven {
+        // Mirror of some old packages from abandoned jcentral.
+        url "https://s3.amazonaws.com/us-east.maven.jcentral.org"
+    }
+}
+
+
+ext {
+  swtVersion = '3.116.0'
+}
+
+configurations.all {
+    resolutionStrategy {
+        dependencySubstitution {
+            def os = System.getProperty("os.name").toLowerCase()
+            if (os.contains("windows")) {
+                substitute module('org.eclipse.platform:org.eclipse.swt.${osgi.platform}') with module("org.eclipse.platform:org.eclipse.swt.win32.win32.x86_64:${swtVersion}")
+            }
+            else if (os.contains("linux")) {
+                substitute module('org.eclipse.platform:org.eclipse.swt.${osgi.platform}') with module("org.eclipse.platform:org.eclipse.swt.gtk.linux.x86_64:${swtVersion}")
+            }
+            else if (os.contains("mac")) {
+                substitute module('org.eclipse.platform:org.eclipse.swt.${osgi.platform}') with module("org.eclipse.platform:org.eclipse.swt.cocoa.macosx.x86_64:${swtVersion}")
+            }
+        }
+    }
+}
+
+// In this section you declare the dependencies for your production and test code
+dependencies {
+    // The production code uses the SLF4J logging API at compile time
+    implementation 'org.slf4j:slf4j-api:1.7.21'
+    implementation 'org.slf4j:slf4j-log4j12:1.7.21'
+    implementation 'net.jcip:jcip-annotations:1.0'
+    implementation 'joda-time:joda-time:2.10.10'
+    // https://mvnrepository.com/artifact/log4j/log4j
+    implementation group: 'log4j', name: 'log4j', version: '1.2.17'
+    implementation 'com.google.guava:guava:19.0'
+    implementation group: 'org.eclipse.platform', name: "org.eclipse.swt.${swtWindowingLibrary}.${swtPlatform}.${swtArch}", version: "${swtVersion}"
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.8.4'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.8.4'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.8.4'
+    // https://mvnrepository.com/artifact/com.tictactec/ta-lib
+    implementation group: 'com.tictactec', name: 'ta-lib', version: '0.4.0'
+    implementation 'org.picocontainer:picocontainer:2.15'
+    implementation 'de.huxhorn.lilith:de.huxhorn.lilith.3rdparty.junique:1.0.4'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.runtime
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.runtime', version: '3.20.100'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface', version: '3.22.100'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface.text
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface.text', version: '3.17.0'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.databinding
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.databinding', version: '1.10.100'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface.databinding
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface.databinding', version: '1.12.200'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.databinding.property
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.databinding.property', version: '1.8.100'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.databinding.observable
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.databinding.observable', version: '1.10.0'
+    // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.databinding.beans
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.databinding.beans', version: '1.7.200'
+    implementation 'org.eclipse.platform:org.eclipse.equinox.common:3.14.100'
+    implementation 'org.eclipse.platform:org.eclipse.core.commands:3.9.800'
+    implementation 'com.rabbitmq:amqp-client:5.11.0'
+    implementation group: 'com.ning', name: 'async-http-client', version: '1.8.17'
+    implementation group: 'org.ejml', name: 'all', version: '0.30'
+    // https://mvnrepository.com/artifact/junit/junit
+    implementation group: 'junit', name: 'junit', version: '4.12'
+    implementation group: 'com.ib', name: 'ib-api-client', version: '0.1'
+    testCompile 'org.mockito:mockito-core:2.2.9'
+}
+
+
+compileJava {
+  source = ['src/main/java']
+  options.fork = true
+}
+
+shadowJar {
+    baseName = 'ptltrader'
+    classifier = archSpec
+}
+
+task swtDiag << {
+    println 'archSpec: ' + archSpec
+    println 'swtWindowingLibrary: ' + swtWindowingLibrary
+    println 'swtArch: ' + swtArch
+    println 'swtPlatform: ' + swtPlatform
+    
+}
