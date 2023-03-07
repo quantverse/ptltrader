@@ -57,7 +57,7 @@ dependencies {
     implementation 'org.slf4j:slf4j-api:1.7.21'
     implementation 'org.slf4j:slf4j-log4j12:1.7.21'
     implementation 'net.jcip:jcip-annotations:1.0'
-    implementation 'joda-time:joda-time:2.10.10'
+    implementation 'joda-time:joda-time:2.12.2'
     // https://mvnrepository.com/artifact/log4j/log4j
     implementation group: 'log4j', name: 'log4j', version: '1.2.17'
     implementation 'com.google.guava:guava:19.0'
