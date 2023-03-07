@@ -306,11 +306,14 @@ public class SimpleWrapper extends AbstractModelObject implements EWrapper, Star
 			// system warning
 			logger.warn(String.format("id: %d code: %d msg: %s", id, errorCode, errorMsg));
 			bus.post(new LogEvent(String.format("IB Warning: id: %d code: %d msg: %s", id, errorCode, errorMsg)));
-			
+
 		} else if (errorCode>=2100) {
 			// warning/notice message
 			logger.info(String.format("id: %d code: %d msg: %s", id, errorCode, errorMsg));
-			bus.post(new LogEvent(String.format("IB Notice: id: %d code: %d msg: %s", id, errorCode, errorMsg)));
+			// 2176 is the annoying message about fractional shares and rounding in hist. data, lets suppress it
+			if (errorCode != 2176) {
+				bus.post(new LogEvent(String.format("IB Notice: id: %d code: %d msg: %s", id, errorCode, errorMsg)));
+			}
 			onMaybeConnected();
 			
 		} else {
@@ -326,7 +329,6 @@ public class SimpleWrapper extends AbstractModelObject implements EWrapper, Star
 				break;
 			}
 		}
-
 	}
 
 	@Override
