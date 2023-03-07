@@ -31,7 +31,7 @@ repositories {
 
 
 ext {
-  swtVersion = '3.116.0'
+  swtVersion = '3.122.0'
 }
 
 configurations.all {
@@ -70,11 +70,11 @@ dependencies {
     implementation 'org.picocontainer:picocontainer:2.15.1-SNAPSHOT'
     implementation 'de.huxhorn.lilith:de.huxhorn.lilith.3rdparty.junique:1.0.4'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.runtime
-    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.runtime', version: '3.20.100'
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.runtime', version: '3.26.100'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface
-    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface', version: '3.22.100'
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface', version: '3.28.0'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface.text
-    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface.text', version: '3.17.0'
+    implementation group: 'org.eclipse.platform', name: 'org.eclipse.jface.text', version: '3.22.0'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.databinding
     implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.databinding', version: '1.10.100'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface.databinding
