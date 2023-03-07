@@ -95,7 +95,7 @@ public class AboutDialog extends Dialog {
 		lblProductCopyright.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		lblProductCopyright.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductCopyright.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
-		lblProductCopyright.setText("\u00A9 2011-2021 Quantverse OÜ");
+		lblProductCopyright.setText("\u00A9 2011-2023 Quantverse OÜ");
 		
 		StyledText aboutText = new StyledText(shell, SWT.WRAP);
 		aboutText.setDoubleClickEnabled(false);
