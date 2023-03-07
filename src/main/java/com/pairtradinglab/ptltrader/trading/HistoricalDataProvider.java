@@ -102,7 +102,7 @@ public class HistoricalDataProvider {
 		}
 		
 		l.debug(String.format("requesting historical data for %s, request id = %d", contract.m_symbol, reqid));
-		DateTimeFormatter fmt = DateTimeFormat.forPattern("yyyyMMdd 00:00:00");
+		DateTimeFormatter fmt = DateTimeFormat.forPattern("yyyyMMdd-00:00:00");
 		HistoricalDataRequest req = new HistoricalDataRequest(reqid, contract, DateTime.now().toString(fmt), "1 Y", "1 day");
 		ibWrapper.executeHistoricalDataRequestQueued(req);
 		
@@ -144,7 +144,7 @@ public class HistoricalDataProvider {
 	@Subscribe
 	public void onError(Error e) {
 		if (!e.ibWrapperUid.equals(ibWrapper.getUid())) return; // ignore error of other connections!
-		if (e.id>0 && e.id==reqid && ibWrapper.hmapCheckExists(reqid)) {
+		if (e.id>0 && e.code !=2176 && e.id==reqid && ibWrapper.hmapCheckExists(reqid)) {
 			l.warn(String.format("historical data request failed for request #%d", reqid));
 			ibWrapper.hmapRemove(reqid);
 			if (owner!=null) owner.notifyRequestFailed(reqid, this, e.code, e.message);
