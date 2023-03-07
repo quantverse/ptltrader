@@ -80,17 +80,20 @@ public class AboutDialog extends Dialog {
 		
 		Label lblProductName = new Label(shell, SWT.NONE);
 		lblProductName.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblProductName.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductName.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
 		lblProductName.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblProductName.setText("PTL Trader");
 		
 		Label lblProductVersion = new Label(shell, SWT.NONE);
 		lblProductVersion.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblProductVersion.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductVersion.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblProductVersion.setText("Version: " + Version.getVersion());
 		
 		Label lblProductCopyright = new Label(shell, SWT.NONE);
 		lblProductCopyright.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblProductCopyright.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductCopyright.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblProductCopyright.setText("\u00A9 2011-2021 Quantverse OÜ");
 		
@@ -100,6 +103,8 @@ public class AboutDialog extends Dialog {
 		aboutText.setLeftMargin(10);
 		aboutText.setRightMargin(10);
 		aboutText.setTopMargin(10);
+		aboutText.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		aboutText.setForeground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
 		String licence_notice = "This program is free software: you can redistribute it and/or modify\n" +
 				"it under the terms of the GNU General Public License as published by\n" +
 				"the Free Software Foundation, either version 3 of the License, or\n" +

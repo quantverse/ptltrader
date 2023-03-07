@@ -492,7 +492,6 @@ public class Application {
 		tableViewerPortfolios = new TableViewer(sashForm2, SWT.BORDER | SWT.FULL_SELECTION);
 		tableViewerPortfolios.setColumnProperties(new String[] {});
 		tablePortfolios = tableViewerPortfolios.getTable();
-		tablePortfolios.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		tablePortfolios.setLinesVisible(true);
 		tablePortfolios.setHeaderVisible(true);
 		
