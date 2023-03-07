@@ -1582,7 +1582,6 @@ public class Application {
 		compositeMiscSettings.setLayout(new GridLayout(3, false));
 		
 		Group grpPairTradingLab = new Group(compositeMiscSettings, SWT.NONE);
-		grpPairTradingLab.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		grpPairTradingLab.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
 		grpPairTradingLab.setLayout(new GridLayout(2, false));
 		grpPairTradingLab.setLayoutData(new GridData(SWT.LEFT, SWT.FILL, false, true, 1, 1));
