@@ -43,7 +43,7 @@ public class ActivityDetector implements Startable {
 	public static final String NYSEARCA_SYMBOL = "NYSEARCA:SPY";
 	public static final String NYSE_SYMBOL = "NYSE:BAC";
 	public static final String NASDAQ_SYMBOL = "NASDAQ:QQQ";
-	public static final String NYSEMKT_SYMBOL = "NYSEMKT:NGD";
+	public static final String NYSEMKT_SYMBOL = "NYSEMKT:SILV";
 	
 	public static final int MAX_DELAY = 1800; // in seconds
 	
