@@ -30,11 +30,13 @@ PTL Trader is written in Java using the [Gradle Build Tool](https://gradle.org/)
 
 ### Prerequisites
 
-* [Java SE Development Kit 8](https://www.oracle.com/cz/java/technologies/javase/javase-jdk8-downloads.html) - yes, for building you need this older JDK because of some components used (`pico`), the application then of course runs on newer Java runtime versions as well
+* [Java Development Kit 11](https://adoptium.net/temurin/releases/?version=11) - yes, for building you need this older JDK, the application then of course runs on newer Java versions as well
 
 ### Building the App
 
-To build fat application JARs for all platforms just use the provided script `build_all_architectures.sh` or just use `./gradlew shadowJar -PforceArch=<your_arch>` to build for just a single platform of your choice.
+First you have to build a [patched version of PicoContainer](https://github.com/quantverse/PicoContainer2). Please place the library jar (`picocontainer-2.15.1-SNAPSHOT.jar`) to `bundled` folder.
+
+Then to build fat application JARs for all platforms just use the provided script `build_all_architectures.sh` or just use `./gradlew shadowJar -PforceArch=<your_arch>` to build for just a single platform of your choice.
 
 `./gradlew run` will just build the software and run it for your current platform.
 
@@ -57,17 +59,19 @@ BUILD SUCCESSFUL in 21s
 
 ## Running PTL Trader
 
-You need to have 64bit Java JRE installed first, at least version 8. Then you can just write:
+You need to have 64bit Java JRE/JDK installed first, at least version 11. Then you can use:
 
 ```
-java -jar <your generated application JAR.jar>
+java --add-opens java.base/java.net=ALL-UNNAMED --add-opens=java.base/sun.security.util=ALL-UNNAMED -jar <your generated application JAR.jar>
 ```
 
-Under macOS you need to provide extra parameters:
+Under macOS you need to provide extra parameter:
 
 ```
-java -XstartOnFirstThread -jar <your generated application JAR.jar>
+java --add-opens java.base/java.net=ALL-UNNAMED --add-opens=java.base/sun.security.util=ALL-UNNAMED -XstartOnFirstThread -jar <your generated application JAR.jar>
 ```
+
+Please note the section Windows Extras for more information about running PTL Trader under Windows.
 
 You will need a running instance of [IB Trader Workstation (TWS)](https://www.interactivebrokers.com/en/index.php?f=14099) or [IB Gateway](https://www.interactivebrokers.com/en/index.php?f=16457) so PTL Trader can receive market data and submit orders to your IB account.
 
@@ -75,11 +79,15 @@ Market data subscriptions are [required](https://www.pairtradinglab.com/faq#ptlt
 
 ## Windows Extras
 
+You need to have either Java JDK 11+ or JRE 11+ installed to be able to run PTL Trader under Windows. We recommend to install the [Eclipse Temurin JRE from Adoptium](https://adoptium.net/temurin/releases/).
+
 ### Wrapping Application to Single EXE File
 
 You can optionally use [launch4j](http://launch4j.sourceforge.net/) to wrap the generated JAR (win64 arch) to a single EXE if you want. Use the launch configuration in the `launch4j` folder.
 
 Note: launch4j is a cross-platform application, running also under Linux and macOS.
+
+We supply prebuilt EXE launcher for the application in our Release page.
 
 ### Building MSI Installer
 
@@ -100,6 +108,8 @@ light -ext WixUIExtension -ext WixUtilExtension installer_win64.wixobj -out ptlt
 ```
 
 `ptltrader_win64.msi` will be built in your current directory.
+
+**Please note for installing this container you need the JRE installed! JDK will not work.**
 
 ## License
 
