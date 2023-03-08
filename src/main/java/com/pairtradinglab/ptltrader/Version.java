@@ -19,7 +19,7 @@
 package com.pairtradinglab.ptltrader;
 
 public class Version {
-	private final static String version = "1.6.0";
+	private final static String version = "1.7.0";
 	
 	static String getVersion() {
 		return version;

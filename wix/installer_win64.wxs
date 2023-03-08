@@ -2,18 +2,18 @@
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
 
   <Product Name='PTLTrader' Id='66441f40-6e10-42c4-9c3a-96af2c37e228' UpgradeCode='cff2d2fd-c294-40ff-b90d-295a342b2dcc'
-    Language='1033' Codepage='1252' Version='1.6.0' Manufacturer='Quantverse OÜ'>
+    Language='1033' Codepage='1252' Version='1.7.0' Manufacturer='Quantverse OU'>
 
         <Package Id='*' Keywords='Installer' Description="PTLTrader Installer"
-          Manufacturer='Quantverse OÜ'
+          Manufacturer='Quantverse OU'
           InstallerVersion='300' Languages='1033' Compressed='yes' SummaryCodepage='1252' Platform="x64" />
         
         
         <!-- Check some requirements ONLY on "install", but not on modify or uninstall. -->
         <Property Id="JAVA_CURRENT_VERSION">
-          <RegistrySearch Id="JRE_CURRENT_VERSION_REGSEARCH" Root="HKLM" Key="SOFTWARE\JavaSoft\Java Runtime Environment" Name="CurrentVersion" Type="raw" Win64="yes" />
+          <RegistrySearch Id="JRE_CURRENT_VERSION_REGSEARCH" Root="HKLM" Key="SOFTWARE\JavaSoft\JRE" Name="CurrentVersion" Type="raw" Win64="yes" />
         </Property>
-        <Condition Message="Java Runtime Environment (64 Bit) is not installed or outdated. Please install Oracle JRE 1.8 or later."><![CDATA[Installed OR (JAVA_CURRENT_VERSION >= "1.8")]]></Condition>
+        <Condition Message="Java (64 Bit) is not installed or outdated. Please install Java 11 or later."><![CDATA[Installed OR (JAVA_CURRENT_VERSION >= "11")]]></Condition>
         
         
         <Media Id="1" Cabinet="myapplication.cab" EmbedCab="yes" />
@@ -32,7 +32,7 @@
         <!-- Step 2: Add files to your installer package -->
         <DirectoryRef Id="APPLICATIONROOTDIRECTORY">
             <Component Id="ptltrader.exe" Guid="063f04f9-f617-4be0-a092-84d9c6ade039" Win64="yes">
-                <File Id="ptltrader.exe" Name="ptltrader.exe" Source="ptltrader-1.6.0-win64.exe" KeyPath="yes" Checksum="yes" ProcessorArchitecture="x64">
+                <File Id="ptltrader.exe" Name="ptltrader.exe" Source="ptltrader-1.7.0-win64.exe" KeyPath="yes" Checksum="yes" ProcessorArchitecture="x64">
                   
                 </File>
             </Component>
