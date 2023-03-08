@@ -139,16 +139,16 @@ public class PtlApiClient implements Startable {
 		this.status = status;
 		this.legHistory = legHistory;
 		this.tradeHistory = tradeHistory;
-		
+
 		Builder builder = new AsyncHttpClientConfig.Builder();
 		
-		builder.setRequestTimeoutInMs(30000)
-		    .setExecutorService(executor)
-		    .build();
+		builder
+			.setRequestTimeout(30000)
+			.setConnectTimeout(20000)
+			.setExecutorService(executor)
+			.build();
 		
 		normalClient = new AsyncHttpClient(new JDKAsyncHttpProvider(builder.build()));
-		
-		
 	}
 	
 	private Realm getRealm() {
@@ -222,10 +222,9 @@ public class PtlApiClient implements Startable {
 			    public void onThrowable(Throwable t) {
 			        // Something wrong happened.
 			    	handleError(t, "loadPortfolios");
-			    	
 			    }
 			});
-		} catch (IOException e) {
+		} catch (Exception e) {
 			handleError(e, "loadPortfolios");
 		}
 		
@@ -283,7 +282,7 @@ public class PtlApiClient implements Startable {
 			    	
 			    }
 			});
-		} catch (IOException e) {
+		} catch (Exception e) {
 			handleError(e, "loadTransactionHistories");
 		}
 		
@@ -341,7 +340,7 @@ public class PtlApiClient implements Startable {
 			    	
 			    }
 			});
-		} catch (IOException e) {
+		} catch (Exception e) {
 			handleError(e, "loadPairTradeHistories");
 		}
 		
@@ -441,7 +440,7 @@ public class PtlApiClient implements Startable {
 			    	
 			    }
 			});
-		} catch (IOException e) {
+		} catch (Exception e) {
 			handleError(e, "bindPortfolioToAccount");
 		}
 		

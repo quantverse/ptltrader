@@ -88,7 +88,7 @@ dependencies {
     implementation 'org.eclipse.platform:org.eclipse.equinox.common:3.14.100'
     implementation 'org.eclipse.platform:org.eclipse.core.commands:3.9.800'
     implementation 'com.rabbitmq:amqp-client:5.11.0'
-    implementation group: 'com.ning', name: 'async-http-client', version: '1.8.17'
+    implementation group: 'com.ning', name: 'async-http-client', version: '1.9.40'
     implementation group: 'org.ejml', name: 'all', version: '0.30'
     // https://mvnrepository.com/artifact/junit/junit
     implementation group: 'junit', name: 'junit', version: '4.12'
