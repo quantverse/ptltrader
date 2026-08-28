@@ -22,7 +22,12 @@ Pull Requests are welcome but prepare for a strict review process, as this softw
 
 ## Documentation
 
-See the [PTL Trader Manual](https://wiki.pairtradinglab.com/wiki/PTL_Trader_Manual).
+For end users, see the [PTL Trader Manual](https://wiki.pairtradinglab.com/wiki/PTL_Trader_Manual).
+
+For developers:
+
+* [ARCHITECTURE.md](ARCHITECTURE.md) — runtime topology, components, threading model and the flows that connect them.
+* [TECHNICAL.md](TECHNICAL.md) — toolchain, source layout, configuration, external interfaces, trading model reference, engine status codes, safety rules, testing and packaging.
 
 ## Building PTL Trader
 
