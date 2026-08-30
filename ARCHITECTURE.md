@@ -90,10 +90,9 @@ The code is organised by responsibility rather than by feature.
 
 ## 3. Dependency injection and object lifecycle
 
-Wiring happens in one place: `Application.main()`. The container is a **patched
-PicoContainer 2.15.1** (see `README.md` — the patched jar must be built separately
-and dropped into `bundled/`) configured with `Caching` behaviour, so every
-registered component is effectively a singleton.
+Wiring happens in one place: `Application.main()`. The container is
+**PicoContainer 2.16** (upstream, resolved from Maven Central) configured with
+`Caching` behaviour, so every registered component is effectively a singleton.
 
 ```java
 MutablePicoContainer pico = new DefaultPicoContainer(new Caching());

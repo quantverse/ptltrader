@@ -17,7 +17,7 @@ For the design rationale — layering, threading model, event flows — see
 | Language / bytecode target | Java, `targetCompatibility = 11` (`gradle.properties`) |
 | Build | Gradle 7.6.1 via the wrapper, `shadow` 4.0.2 for fat jars |
 | UI | SWT 3.122.0 + JFace + Eclipse Data Binding |
-| DI container | PicoContainer 2.15.1-SNAPSHOT (**patched fork**) |
+| DI container | PicoContainer 2.16 |
 | Event bus | Guava 19.0 `AsyncEventBus` |
 | Broker API | `com.ib:ib-api-client:0.1` |
 | HTTP | ning `async-http-client` 1.9.40 |
@@ -42,13 +42,10 @@ value is sent to the PTL API in the `X-PTL-Version` header).
 ### 2.1 Prerequisites
 
 * **JDK 11** — required for *building*. Newer JDKs are fine for running.
-* A **patched PicoContainer** jar. Build
-  <https://github.com/quantverse/PicoContainer2> and copy
-  `picocontainer-2.15.1-SNAPSHOT.jar` into `bundled/` (the directory is
-  git-ignored and is registered as a `flatDir` repository in `build.gradle`).
 
-`build.gradle` also declares an S3-hosted mirror of some packages orphaned by the
-jcenter shutdown, alongside Maven Central.
+All dependencies resolve from public repositories: alongside Maven Central,
+`build.gradle` declares an S3-hosted mirror of some packages orphaned by the
+jcenter shutdown.
 
 ### 2.2 Commands
 
@@ -661,7 +658,6 @@ and/or `ConfidentialEvent` (suppressed in confidential mode) as appropriate.
 | Symptom | Where to look |
 |---|---|
 | "already running for profile" on startup | another instance holds the JUnique lock; use a different profile or kill the other process |
-| Build fails resolving `picocontainer-2.15.1-SNAPSHOT` | the patched jar is missing from `bundled/` (§2.1) |
 | Build fails resolving SWT natives | wrong/absent `-PforceArch`; run `./gradlew swtDiag` |
 | macOS: app exits immediately at launch | missing `-XstartOnFirstThread` |
 | `NoSuchMethodError` / reflection errors from HTTP or TLS | missing `--add-opens` flags (§4) |

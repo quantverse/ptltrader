@@ -39,9 +39,7 @@ PTL Trader is written in Java using the [Gradle Build Tool](https://gradle.org/)
 
 ### Building the App
 
-First you have to build a [patched version of PicoContainer](https://github.com/quantverse/PicoContainer2). Please place the library jar (`picocontainer-2.15.1-SNAPSHOT.jar`) to `bundled` folder.
-
-Then to build fat application JARs for all platforms just use the provided script `build_all_architectures.sh` or just use `./gradlew shadowJar -PforceArch=<your_arch>` to build for just a single platform of your choice.
+To build fat application JARs for all platforms just use the provided script `build_all_architectures.sh` or just use `./gradlew shadowJar -PforceArch=<your_arch>` to build for just a single platform of your choice.
 
 `./gradlew run` will just build the software and run it for your current platform.
 

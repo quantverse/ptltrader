@@ -23,10 +23,6 @@ repositories {
         // Mirror of some old packages from abandoned jcentral.
         url "https://s3.amazonaws.com/us-east.maven.jcentral.org"
     }
-
-    flatDir {
-        dirs 'bundled'
-    }
 }
 
 
@@ -67,7 +63,7 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.8.4'
     // https://mvnrepository.com/artifact/com.tictactec/ta-lib
     implementation group: 'com.tictactec', name: 'ta-lib', version: '0.4.0'
-    implementation 'org.picocontainer:picocontainer:2.15.1-SNAPSHOT'
+    implementation 'org.picocontainer:picocontainer:2.16'
     implementation 'de.huxhorn.lilith:de.huxhorn.lilith.3rdparty.junique:1.0.4'
     // https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.core.runtime
     implementation group: 'org.eclipse.platform', name: 'org.eclipse.core.runtime', version: '3.26.100'
