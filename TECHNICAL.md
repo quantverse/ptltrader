@@ -23,7 +23,7 @@ For the design rationale — layering, threading model, event flows — see
 | HTTP | ning `async-http-client` 1.9.40 |
 | AMQP | `com.rabbitmq:amqp-client` 5.11.0 |
 | JSON | Jackson 2.8.4 |
-| Time | Joda-Time 2.12.2 |
+| Time | Joda-Time 2.14.3 |
 | Technical analysis | TA-Lib (`com.tictactec:ta-lib:0.4.0`) |
 | Linear algebra | EJML 0.30 |
 | Logging | SLF4J + log4j 1.2.17 |
