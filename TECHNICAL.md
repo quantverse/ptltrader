@@ -16,7 +16,7 @@ For the design rationale — layering, threading model, event flows — see
 |---|---|
 | Language / bytecode target | Java, `targetCompatibility = 11` (`gradle.properties`) |
 | Build | Gradle 7.6.1 via the wrapper, `shadow` 4.0.2 for fat jars |
-| UI | SWT 3.122.0 + JFace + Eclipse Data Binding |
+| UI | SWT 3.123.0 + JFace + Eclipse Data Binding |
 | DI container | PicoContainer 2.16 |
 | Event bus | Guava 19.0 `AsyncEventBus` |
 | Broker API | `com.ib:ib-api-client:0.1` |

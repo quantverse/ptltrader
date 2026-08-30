@@ -27,7 +27,7 @@ repositories {
 
 
 ext {
-  swtVersion = '3.122.0'
+  swtVersion = '3.123.0'
 }
 
 configurations.all {
