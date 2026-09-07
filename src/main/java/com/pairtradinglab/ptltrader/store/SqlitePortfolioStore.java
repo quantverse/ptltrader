@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.Duration;
 import org.picocontainer.Startable;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,12 +54,16 @@ import com.pairtradinglab.ptltrader.events.PortfolioSyncOutRequest;
 import com.pairtradinglab.ptltrader.events.StoreProblem;
 import com.pairtradinglab.ptltrader.events.StrategySyncOutRequest;
 import com.pairtradinglab.ptltrader.model.LegHistory;
+import com.pairtradinglab.ptltrader.model.LegHistoryEntry;
 import com.pairtradinglab.ptltrader.model.PairStrategy;
 import com.pairtradinglab.ptltrader.model.Portfolio;
 import com.pairtradinglab.ptltrader.model.PortfolioList;
 import com.pairtradinglab.ptltrader.model.Status;
 import com.pairtradinglab.ptltrader.model.TradeHistory;
+import com.pairtradinglab.ptltrader.model.TradeHistoryEntry;
+import com.pairtradinglab.ptltrader.trading.events.HistoryEntry;
 import com.pairtradinglab.ptltrader.trading.events.PairStateUpdated;
+import com.pairtradinglab.ptltrader.trading.events.TransactionEvent;
 
 /**
  * SQLite-backed portfolio store.
@@ -322,6 +327,90 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		return new DateTime(DateTimeZone.UTC).toString();
 	}
 
+	/** How much history is loaded into the UI tables at startup. */
+	public static final int HISTORY_LOAD_LIMIT = 1000;
+
+	static void insertTradeHistory(Connection c, HistoryEntry he) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement(
+				"INSERT INTO trade_history (datetime, account, stock1, stock2, action, "
+				+ "realized_pl, realized_pl_pct, commissions, zscore, comment) "
+				+ "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+			ps.setString(1, he.datetime.withZone(DateTimeZone.UTC).toString());
+			ps.setString(2, he.account);
+			ps.setString(3, he.stock1);
+			ps.setString(4, he.stock2);
+			ps.setString(5, he.action);
+			ps.setDouble(6, he.realizedPl);
+			ps.setDouble(7, he.realizedPlPerc);
+			ps.setDouble(8, he.commissions);
+			ps.setDouble(9, he.zscore);
+			ps.setString(10, he.comment);
+			ps.executeUpdate();
+		}
+	}
+
+	static List<TradeHistoryEntry> readTradeHistory(Connection c, int limit) throws SQLException {
+		List<TradeHistoryEntry> out = new ArrayList<TradeHistoryEntry>();
+		try (PreparedStatement ps = c.prepareStatement(
+				"SELECT datetime, account, stock1, stock2, action, realized_pl, realized_pl_pct, "
+				+ "commissions, zscore, comment FROM trade_history ORDER BY datetime DESC, id DESC LIMIT ?")) {
+			ps.setInt(1, limit);
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					out.add(new TradeHistoryEntry(
+							new DateTime(rs.getString("datetime")).withZone(DateTimeZone.getDefault()),
+							rs.getString("stock1"), rs.getString("stock2"), rs.getString("action"),
+							rs.getDouble("realized_pl"), rs.getDouble("realized_pl_pct"),
+							rs.getDouble("commissions"), rs.getDouble("zscore"),
+							rs.getString("comment"), rs.getString("account")));
+				}
+			}
+		}
+		return out;
+	}
+
+	static void insertLegHistory(Connection c, TransactionEvent te) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement(
+				"INSERT INTO leg_history (datetime, account, symbol, action, qty, price, value, "
+				+ "realized_pl, commissions, slippage, fill_time_ms) "
+				+ "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+			ps.setString(1, te.getDatetime().withZone(DateTimeZone.UTC).toString());
+			ps.setString(2, te.getAccount());
+			ps.setString(3, te.symbol);
+			ps.setString(4, te.direction == TransactionEvent.DIRECTION_LONG
+					? LegHistoryEntry.ACTION_BUY : LegHistoryEntry.ACTION_SELL);
+			ps.setInt(5, te.qty);
+			ps.setDouble(6, te.price);
+			ps.setDouble(7, te.value);
+			ps.setDouble(8, te.getRealizedPl());
+			ps.setDouble(9, te.getCommissions());
+			ps.setDouble(10, 0.0);
+			ps.setLong(11, te.getFillTime() == null ? 0L : te.getFillTime().getMillis());
+			ps.executeUpdate();
+		}
+	}
+
+	static List<LegHistoryEntry> readLegHistory(Connection c, int limit) throws SQLException {
+		List<LegHistoryEntry> out = new ArrayList<LegHistoryEntry>();
+		try (PreparedStatement ps = c.prepareStatement(
+				"SELECT datetime, account, symbol, action, qty, price, value, realized_pl, "
+				+ "commissions, slippage, fill_time_ms FROM leg_history "
+				+ "ORDER BY datetime DESC, id DESC LIMIT ?")) {
+			ps.setInt(1, limit);
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					out.add(new LegHistoryEntry(
+							new DateTime(rs.getString("datetime")).withZone(DateTimeZone.getDefault()),
+							rs.getString("symbol"), rs.getString("action"), rs.getInt("qty"),
+							rs.getDouble("realized_pl"), rs.getDouble("commissions"),
+							rs.getDouble("price"), rs.getDouble("value"), rs.getDouble("slippage"),
+							Duration.millis(rs.getLong("fill_time_ms")), rs.getString("account")));
+				}
+			}
+		}
+		return out;
+	}
+
 	// ---- lifecycle ----
 
 	@Override
@@ -344,6 +433,15 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		// a PairStateUpdated/*SyncOutRequest arriving during startup from racing the
 		// initial load's own writes to the PortfolioList.
 		load();
+		// loadHistories() must also run before bus.register(this): a live
+		// TransactionEvent/HistoryEntry arriving during startup would otherwise be
+		// written to the database AND appended to the in-memory table by the beans'
+		// own subscriptions, and then read back again by this backfill - showing up
+		// twice. It is deliberately not folded into load(): Task 8's import flow
+		// calls flush() then load() to refresh the portfolio list, and TradeHistory/
+		// LegHistory.addEntryLast() do not deduplicate, so every import would
+		// re-append up to HISTORY_LOAD_LIMIT rows onto the UI tables.
+		loadHistories();
 		bus.register(this);
 		busRegistered = true;
 	}
@@ -392,6 +490,51 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			logger.error("unable to load portfolios", e);
 			bus.post(new LogEvent("unable to load portfolios: " + e.getMessage()));
 			bus.post(new StoreProblem("load", StoreError.IO_FAILURE, e.getMessage()));
+		}
+	}
+
+	/**
+	 * Backfills the Trade History and Leg History UI tables from the database.
+	 * Called once from start(), after load() and before bus.register(this).
+	 *
+	 * It is deliberately its own method rather than folded into load(): Task 8's
+	 * import flow calls flush() then load() to refresh the portfolio list, and
+	 * TradeHistory/LegHistory.addEntryLast() do not deduplicate, so an import
+	 * would otherwise re-append up to HISTORY_LOAD_LIMIT rows every time. And it
+	 * must finish before bus.register(this), or a live TransactionEvent/
+	 * HistoryEntry arriving during startup would be written to the database AND
+	 * appended to the in-memory table by the beans' own subscriptions, then read
+	 * back again here - showing up twice.
+	 *
+	 * Reads through runOnWorker(), exactly like load(), so every use of the
+	 * Connection stays confined to db-worker.
+	 */
+	private void loadHistories() {
+		if (database == null) return;
+		try {
+			List<TradeHistoryEntry> trades = runOnWorker(new ReadTask<List<TradeHistoryEntry>>() {
+				@Override
+				public List<TradeHistoryEntry> run(Connection c) throws Exception {
+					return readTradeHistory(c, HISTORY_LOAD_LIMIT);
+				}
+			});
+			for (TradeHistoryEntry e : trades) {
+				tradeHistory.addEntryLast(e);
+			}
+			List<LegHistoryEntry> legs = runOnWorker(new ReadTask<List<LegHistoryEntry>>() {
+				@Override
+				public List<LegHistoryEntry> run(Connection c) throws Exception {
+					return readLegHistory(c, HISTORY_LOAD_LIMIT);
+				}
+			});
+			for (LegHistoryEntry e : legs) {
+				legHistory.addEntryLast(e);
+			}
+			logger.info("loaded " + trades.size() + " trade history and " + legs.size() + " leg history rows");
+		} catch (Exception e) {
+			logger.error("unable to load history", e);
+			bus.post(new LogEvent("unable to load history: " + e.getMessage()));
+			bus.post(new StoreProblem("loadHistories", StoreError.IO_FAILURE, e.getMessage()));
 		}
 	}
 
@@ -530,5 +673,31 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	@Subscribe
 	public void onPairStateUpdated(PairStateUpdated event) {
 		saveStrategyState(event.strategy);
+	}
+
+	// The retired web service used to store history as a side effect of
+	// receiving telemetry. LegHistory and TradeHistory keep their own @Subscribe
+	// handlers for the live in-memory tables, unchanged; the store is an
+	// independent second subscriber to the same events, so neither depends on
+	// the other.
+
+	@Subscribe
+	public void onHistoryEntry(final HistoryEntry he) {
+		enqueue(new SqlTask() {
+			@Override
+			public void run(Connection c) throws SQLException {
+				insertTradeHistory(c, he);
+			}
+		});
+	}
+
+	@Subscribe
+	public void onTransactionEvent(final TransactionEvent te) {
+		enqueue(new SqlTask() {
+			@Override
+			public void run(Connection c) throws SQLException {
+				insertLegHistory(c, te);
+			}
+		});
 	}
 }
