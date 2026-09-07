@@ -88,6 +88,11 @@ public class HistoryPersistenceTest {
 		te.setRealizedPl(33.25);
 		te.setCommissions(1.5);
 		te.setFillTime(Duration.millis(1234));
+		// value is price*qty = 1250.0. With cumVal=1260.0 and DIRECTION_LONG,
+		// getSlippage() = value - cumVal = -10.0. Picking a non-zero value with a
+		// definite sign (rather than a value that happens to be symmetric) means a
+		// sign error in which operand is subtracted from which would be caught.
+		te.add2CumVal(1260.0);
 		SqlitePortfolioStore.insertLegHistory(db.getConnection(), te);
 
 		List<LegHistoryEntry> out = SqlitePortfolioStore.readLegHistory(db.getConnection(), 100);
@@ -100,6 +105,7 @@ public class HistoryPersistenceTest {
 		assertEquals(1250.0, e.getValue(), 1e-9);
 		assertEquals(33.25, e.getRealizedPl(), 1e-9);
 		assertEquals(1.5, e.getCommissions(), 1e-9);
+		assertEquals(-10.0, e.getSlippage(), 1e-9);
 		assertEquals(1234, e.getFillTime().getMillis());
 		assertEquals("DU123456", e.getAccount());
 	}

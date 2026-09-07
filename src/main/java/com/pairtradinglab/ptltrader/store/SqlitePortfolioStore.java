@@ -384,7 +384,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			ps.setDouble(7, te.value);
 			ps.setDouble(8, te.getRealizedPl());
 			ps.setDouble(9, te.getCommissions());
-			ps.setDouble(10, 0.0);
+			ps.setDouble(10, te.getSlippage());
 			ps.setLong(11, te.getFillTime() == null ? 0L : te.getFillTime().getMillis());
 			ps.executeUpdate();
 		}
@@ -433,14 +433,8 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		// a PairStateUpdated/*SyncOutRequest arriving during startup from racing the
 		// initial load's own writes to the PortfolioList.
 		load();
-		// loadHistories() must also run before bus.register(this): a live
-		// TransactionEvent/HistoryEntry arriving during startup would otherwise be
-		// written to the database AND appended to the in-memory table by the beans'
-		// own subscriptions, and then read back again by this backfill - showing up
-		// twice. It is deliberately not folded into load(): Task 8's import flow
-		// calls flush() then load() to refresh the portfolio list, and TradeHistory/
-		// LegHistory.addEntryLast() do not deduplicate, so every import would
-		// re-append up to HISTORY_LOAD_LIMIT rows onto the UI tables.
+		// See loadHistories()'s Javadoc for why it must run here: after load(),
+		// before bus.register(this).
 		loadHistories();
 		bus.register(this);
 		busRegistered = true;
