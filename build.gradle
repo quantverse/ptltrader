@@ -89,6 +89,7 @@ dependencies {
     // https://mvnrepository.com/artifact/junit/junit
     implementation group: 'junit', name: 'junit', version: '4.12'
     implementation group: 'com.ib', name: 'ib-api-client', version: '0.1'
+    implementation 'org.xerial:sqlite-jdbc:3.49.1.0'
     testImplementation 'org.mockito:mockito-core:2.2.9'
 }
 
