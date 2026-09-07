@@ -2,13 +2,31 @@
 
 PTL Trader is a lightweight, cross-platform software which makes automated (or semi-automated) trading of complex U.S. equity pair strategy portfolios possible. It currently supports the [Interactive Brokers](https://www.interactivebrokers.com) as data & execution backend. 
 
-This software is tightly coupled with [Pair Trading Lab](https://www.pairtradinglab.com/), which allows you to assemble, analyze and backtest equity pairs and pair trading strategy portfolios. It also features a pre-screened searchable database of pairs.
-
-You need a valid Pair Trading Lab account to use this software. It won't work without the PTL account (premium subscription is not needed though). However, feel free to fork this repository and alter the software to (for example) load the strategy portfolio from CSV files, if you wish. You are free to do that as long you don't violate the [GNU GPL v3](https://www.gnu.org/licenses/gpl-3.0.html) license.
+PTL Trader was originally built as a companion to [Pair Trading Lab](https://www.pairtradinglab.com/), which let you assemble, analyze and backtest equity pairs and pair trading strategy portfolios, and previously supplied all portfolio and strategy configuration over its web API. Pair Trading Lab is shutting down, so PTL Trader now owns its data locally: portfolios, strategy parameters and trade history live in a local database instead of on a server, and you manage them directly in the application (import, export, create, delete, add a pair).
 
 First proprietary version of PTL Trader was released already in 2013 and got gradually field tested in hundreds of instances trading live accounts of PTL's clients. It is already considered mature and well-tested. Since 2021 and version 1.6.0 it is now a free, open source software.
 
 [More Information About PTL Trader](https://www.pairtradinglab.com/ptltrader)
+
+## Migrating from Pair Trading Lab
+
+If you still have portfolios in the Pair Trading Lab Portfolio Manager, **export each one as a JSON file before the service closes** — once it is down there is no way to retrieve them from PTL. Then, in PTL Trader, use **File › Import Portfolio…** to load the file. Importing always creates a new portfolio with fresh internal IDs and an unbound account; nothing is overwritten, so importing the same file twice just gives you two copies to tidy up with **File › Delete Portfolio**.
+
+There is no in-application migration from the old service — the export on the PTL website and the import here are two separate, manual steps, and the export must be done while Pair Trading Lab is still running.
+
+## Data storage
+
+PTL Trader keeps all of its own data — portfolios, strategy configuration, strategy runtime state and trade/leg history — in a local SQLite database. It belongs in your backups.
+
+The database and the log file live together in a platform-specific per-user data directory:
+
+| Platform | Path |
+|---|---|
+| Windows | `%LOCALAPPDATA%\PTLTrader` |
+| Linux | `~/.local/share/ptltrader` |
+| macOS | `~/Library/Application Support/PTLTrader` |
+
+Each profile (see `args[0]` under [Running PTL Trader](#running-ptl-trader)) gets its own `<profile>.db` and `<profile>.log` in that directory. PTL Trader already refuses to start a second instance for the same profile, so the existing single-instance-per-profile rule also guarantees there is only ever one process writing to a given database.
 
 ## Support
 

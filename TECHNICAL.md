@@ -20,8 +20,7 @@ For the design rationale — layering, threading model, event flows — see
 | DI container | PicoContainer 2.16 |
 | Event bus | Guava 19.0 `AsyncEventBus` |
 | Broker API | `com.ib:ib-api-client:0.1` |
-| HTTP | ning `async-http-client` 1.9.40 |
-| AMQP | `com.rabbitmq:amqp-client` 5.11.0 |
+| Database | SQLite (`org.xerial:sqlite-jdbc:3.49.1.0`) |
 | JSON | Jackson 2.8.4 |
 | Time | Joda-Time 2.14.3 |
 | Technical analysis | TA-Lib (`com.tictactec:ta-lib:0.4.0`) |
@@ -33,7 +32,7 @@ For the design rationale — layering, threading model, event flows — see
 
 Current version: **1.7.0** (`gradle.properties`, mirrored in
 `com.pairtradinglab.ptltrader.Version` — keep the two in sync when releasing; the
-value is sent to the PTL API in the `X-PTL-Version` header).
+value is shown in the About box).
 
 ---
 
@@ -88,28 +87,27 @@ wix/                         WiX MSI installer sources
 src/main/java/com/pairtradinglab/ptltrader/
     Application.java         entry point, DI wiring, SWT UI, data bindings
     AboutDialog.java         about box
-    PtlApiClient.java        PTL REST client
-    AmqpEngine.java          RabbitMQ connection, confined to its own thread
-    AmqpProxy.java           event → JSON → SerializedEvent bridge
+    AddPairDialog.java       File > Add Pair... dialog
+    NewPortfolioDialog.java  File > New Portfolio... dialog
     Beacon.java              minute timer
-    SystemMonitor.java       heartbeat / intervention tracking
+    DataDirectory.java       resolves the per-platform data directory
     LoggerFactory(Impl).java log4j bootstrap
     ActiveCores.java         registry of running core threads
     RuntimeParams.java       command-line arguments
     Settings? → model/       (see below)
-    StringXorProcessor.java  secret-key obfuscation
-    SupportedFeatures.java   feature gate
-    Version.java             version string sent to the API
+    Version.java             version string shown in the About box
     events/                  application-level bus events
     ib/SimpleWrapper.java    IB API adapter (EWrapper implementation)
     ib/HistoricalDataRequest.java
     model/                   observable domain beans + converters + validators
+    store/                   SQLite persistence: Database, SqlitePortfolioStore,
+                              PortfolioImporter, PortfolioDocuments, StrategyState
     trading/                 engine, models, data providers, activity detector
     trading/events/          trading-layer bus events
     trading/kernelfx/        numeric kernel for the Kalman models
     org/eclipse/wb/swt/      WindowBuilder resource manager
 src/main/resources/…         icons, LED images
-src/test/java/…              JUnit tests (103 test methods)
+src/test/java/…              JUnit tests (153 test methods)
 ```
 
 `Application.java` is largely generated/maintained by **Eclipse WindowBuilder**.
@@ -132,8 +130,7 @@ java --add-opens java.base/java.net=ALL-UNNAMED \
      -XstartOnFirstThread -jar ptltrader-1.7.0-macosx.jar
 ```
 
-The `--add-opens` flags are required by the ning HTTP client and the TLS stack on
-Java 11+.
+The `--add-opens` flags are required by the networking/TLS stack on Java 11+.
 
 A running **IB Trader Workstation or IB Gateway** with the API enabled is required,
 as are the relevant US market-data subscriptions.
@@ -144,8 +141,8 @@ as are the relevant US market-data subscriptions.
 
 | Position | Value | Meaning |
 |---|---|---|
-| `args[0]` | profile name | default `default`. Scopes the instance lock, the preferences nodes and the log file. |
-| `args[1]` | `autostart` | connect to PTL as soon as the window is first activated, then connect to IB as soon as the AMQP bus comes up. |
+| `args[0]` | profile name | default `default`. Scopes the instance lock, the preferences nodes, the database and the log file. |
+| `args[1]` | `autostart` | connect to IB as soon as the window is first activated. |
 
 ```bash
 java … -jar ptltrader.jar accountB autostart
@@ -162,95 +159,120 @@ profiles may run concurrently.
 
 ## 5. Configuration and persistence
 
-There is **no configuration file**. Everything is either fetched from PTL or stored
-in `java.util.prefs` (Windows registry, `~/.java/.userPrefs` on Linux,
-`~/Library/Preferences` on macOS).
+There is **no configuration file**. IB connection settings live in
+`java.util.prefs` (Windows registry, `~/.java/.userPrefs` on Linux,
+`~/Library/Preferences` on macOS); everything else — portfolios, strategy
+configuration, strategy runtime state, and trade/leg history — lives in a local
+SQLite database, one file per profile.
 
 | Preferences node (`Preferences.userRoot()`) | Keys |
 |---|---|
-| `com/pairtradinglab/ptltrader/model/Settings/<profile>` | `ptlAccessKey`, `ptlSecretKey` (obfuscated), `savePtlSecretKey`, `enableConfidentialMode` |
 | `com/pairtradinglab/ptltrader/ib/SimpleWrapper/1/<profile>` | `ibClientId` (default `1`), `ibHost` (default `localhost`), `ibPort` (default `7496`), `ibFaAccount` (default empty) |
 
 > The `1` segment in the IB node is a connection index, reserved for a future
 > multi-connection build.
 
-### 5.1 Secret-key storage
+`com.pairtradinglab.ptltrader.DataDirectory` resolves one per-user data directory
+that holds both `<profile>.db` and `<profile>.log`:
 
-`StringXorProcessor` XORs the secret key with the hard-coded constant
-`Settings.SECRET_KEY_ENC_KEY` and Base64-encodes the result. **This is obfuscation,
-not encryption** — it stops the key appearing in plain text in the registry and
-nothing more. Users who do not want it stored at all should clear
-*Save secret key*, which removes the `ptlSecretKey` entry entirely.
+| Platform | Path |
+|---|---|
+| Windows | `%LOCALAPPDATA%\PTLTrader` |
+| Linux | `~/.local/share/ptltrader` |
+| macOS | `~/Library/Application Support/PTLTrader` |
 
-### 5.2 Confidential mode
+### 5.1 Schema
 
-When enabled, `AmqpProxy` drops every event implementing `ConfidentialEvent`
-instead of publishing it — of the events it forwards, that means `TransactionEvent`
-and `HistoryEntry`. (`EquityChange` and `StrategyPlUpdated` also carry the marker
-but are not forwarded to AMQP in the first place.) Trading continues normally; only
-telemetry is withheld, so PTL will not be able to show trade history or results for
-that instance.
+`com.pairtradinglab.ptltrader.store.Database` opens the connection in WAL mode
+with `synchronous=FULL` and `foreign_keys=ON`, and owns the schema. Current
+`SCHEMA_VERSION = 1`:
 
-### 5.3 Logging
+```sql
+CREATE TABLE schema_version (version INTEGER NOT NULL);
+
+CREATE TABLE portfolios (
+  uid        TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,          -- denormalized so the list can be ordered
+  document   TEXT NOT NULL,          -- config document, incl. strategies[]
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE strategy_state (
+  strategy_uid         TEXT PRIMARY KEY,
+  portfolio_uid        TEXT NOT NULL REFERENCES portfolios(uid) ON DELETE CASCADE,
+  last_opened_datetime TEXT,         -- ISO-8601, UTC
+  last_opened_equity   REAL,
+  last_model_state     TEXT,         -- polymorphic JSON
+  updated_at           TEXT NOT NULL
+);
+
+CREATE TABLE trade_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT NOT NULL, account TEXT NOT NULL,
+  stock1 TEXT NOT NULL, stock2 TEXT NOT NULL, action TEXT NOT NULL,
+  realized_pl REAL NOT NULL, realized_pl_pct REAL NOT NULL, commissions REAL NOT NULL,
+  zscore REAL NOT NULL, comment TEXT
+);
+
+CREATE TABLE leg_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT NOT NULL, account TEXT NOT NULL,
+  symbol TEXT NOT NULL, action TEXT NOT NULL, qty INTEGER NOT NULL, price REAL NOT NULL,
+  value REAL NOT NULL, realized_pl REAL NOT NULL, commissions REAL NOT NULL,
+  slippage REAL NOT NULL, fill_time_ms INTEGER NOT NULL
+);
+
+CREATE INDEX ix_trade_history_dt ON trade_history (datetime DESC);
+CREATE INDEX ix_leg_history_dt   ON leg_history (datetime DESC);
+```
+
+`portfolios.document` holds the same shape `Portfolio.updateFromJson()` /
+`PairStrategy.updateFromJson()` read (see §6.1), but with `last_opened_datetime`,
+`last_opened_equity` and `last_model_state` always absent — those three fields
+live in `strategy_state` instead and are spliced into each strategy node on load
+(`PortfolioDocuments.splice()`). `schema_version` holds a single integer; opening a
+database whose version is *higher* than the running build understands is a fatal
+startup error (a clear message, not a silent downgrade) — see §13.
+
+### 5.2 Logging
 
 `LoggerFactoryImpl` configures log4j once, at root level `DEBUG`, with:
 
 * a `ConsoleAppender`, and
-* a `RollingFileAppender` at
-  `${user.home}/Application Data/PTLTrader/<profile>.log`, max 10 MB per file,
-  5 backups,
+* a `RollingFileAppender` at `<data directory>/<profile>.log` (§5 above), max
+  10 MB per file, 5 backups,
 
 using the layout `%d{ISO8601} [%t] %p %c %x - %m%n`. The thread name (`%t`) and
 logger name (`%c`) are the useful axes: bus threads are `bus-master-N`, per-pair
 core threads are `<accountCode>_<SYM1>_<SYM2>`, and per-pair loggers are named
 `<SYM1>_<SYM2>`.
 
-> Gotcha: the `Application Data` path segment is used on **every** platform, not
-> just Windows. On Linux/macOS the log therefore lands in
-> `~/Application Data/PTLTrader/`.
+The log now lives beside the database in the platform-correct directory above.
+Earlier versions wrote to `${user.home}/Application Data/PTLTrader/<profile>.log`
+on **every** platform, including Linux and macOS, which was a Windows-only
+convention applied everywhere; `DataDirectory` fixes that.
 
 ---
 
 ## 6. External interfaces
 
-### 6.1 Pair Trading Lab REST API
+### 6.1 Portfolio document format
 
-Base URL `https://api.pairtradinglab.com`. Authentication is **preemptive HTTP
-Basic**: access key as principal, secret key as password. Every request except
-`updatePairStrategyState` also carries `X-PTL-Version: <Version.getVersion()>`.
-Timeouts: 20 s connect, 30 s request.
+This is the shape of `portfolios.document` in the database (§5.1) and, wrapped in
+a one- or multi-element JSON array, of a file produced/read by **File › Export
+Portfolio…** / **File › Import Portfolio…**. It is what `Portfolio.updateFromJson()`
+and `PairStrategy.updateFromJson()` read, and no longer a REST response shape now
+that there is no server on the other end. Fields in the upper block of the table
+below are applied **only while the strategy has no running core** (i.e. before it
+is bound, or after an unbind) — changing a model parameter under a live position
+is not supported.
 
-| Method | Path | Called by | Notes |
-|---|---|---|---|
-| `GET` | `/portfolios` | `loadPortfolios(updateOnly)` | full portfolio + strategy tree; feeds `PortfolioList.updateFromJson()` and then `initialize()` |
-| `GET` | `/transactionhistories` | `loadTransactionHistories()` | populates the Leg History table |
-| `GET` | `/pairtradehistories` | `loadPairTradeHistories()` | populates the Trade History table |
-| `PUT` | `/portfolios/{uid}` | `updatePortfolio(p)` | Jackson-serialised `Portfolio`; queued + retried |
-| `PUT` | `/portfolios/{uid}` | `bindPortfolioToAccount(p, code)` | body `{"account_code": …}`; **not** queued — the UI needs the result |
-| `PUT` | `/strategies/{uid}` | `updateStrategy(s)` | Jackson-serialised `PairStrategy`; queued + retried |
-| `PUT` | `/strategies/{uid}` | `updatePairStrategyState(ps)` | body `{last_opened_equity, last_opened_datetime, last_model_state}`; queued + retried |
-| `DELETE` | `/strategies/{uid}` | `deletePairStrategy(ps)` | queued + retried |
-
-Response handling on `GET /portfolios`:
-
-| Status | Result |
-|---|---|
-| `200` | parse, update model, post `PtlApiConnect` (which triggers the AMQP connect) |
-| `400`, `401` | `PtlApiError.ACCESS_DENIED` → error dialog |
-| `412` | `PtlApiError.UNSUPPORTED_VERSION` — this build is too old for the server |
-| transport `SSLProtocolException` | `PtlApiError.SSL_NAME` |
-| other throwable | `PtlApiError.UNKNOWN` |
-
-Queued writes are drained by the `rq-worker` thread, which **retries forever** at
-10 s intervals until it sees HTTP 200. This is intentional: dropping a
-strategy-state update would desynchronise PTL from the live account.
-
-### 6.2 Strategy JSON contract
-
-Fields consumed by `PairStrategy.updateFromJson()`. Those in the upper block are
-applied **only while the strategy has no running core** (i.e. before it is bound, or
-after an unbind) — changing a model parameter under a live position is not
-supported.
+**`last_opened_datetime`, `last_opened_equity` and `last_model_state` are never
+present in the stored document.** They live in `strategy_state` (§5.1) and are
+spliced into each strategy node by `PortfolioDocuments.splice()` when the document
+is read, explicitly `null` where no state row exists yet — `updateFromJson()`
+still reads them with `n.get(...)`, so the splice must always supply the key.
+`PortfolioImporter` correspondingly strips these three fields from an imported
+file if present (`PortfolioDocuments.STATE_FIELDS`); an import can never seed or
+disturb the runtime state of a position.
 
 | JSON field | Model property | Notes |
 |---|---|---|
@@ -263,7 +285,7 @@ supported.
 | `ka_ve`, `ka_usage_target` | Kalman-auto | observation covariance, usage target |
 | `neutrality` | `neutrality` | `0` dollar-neutral, `1` beta-neutral |
 | `ticker1margin`, `ticker2margin` | `marginPerc1/2` | per-leg margin requirement, percent |
-| `last_opened_datetime`, `last_opened_equity`, `last_model_state` | resumed position state | UTC `yyyy-MM-dd HH:mm:ss`; model state is polymorphic JSON |
+| `last_opened_datetime`, `last_opened_equity`, `last_model_state` | resumed position state | UTC `yyyy-MM-dd HH:mm:ss`; model state is polymorphic JSON; **not stored in the document — see above** |
 | `enable_max_days` / `max_days` | timeout rule | |
 | `enable_min_pl` / `min_pl` | minimum P/L to close | |
 | `enable_min_price` / `min_price` | minimum leg price to enter | |
@@ -274,14 +296,18 @@ supported.
 | `allow_positions` | `0` both, `1` long only, `2` short only | |
 | `status` | trading status: `0` inactive, `1` maintain, `2` active | |
 | `slot_occupation` | fraction of a portfolio slot this pair consumes | |
-| `features` | list of feature flags, gated by `SupportedFeatures` | |
 
 Pairs themselves come from `ticker1` / `ticker2` (plus `trade_as_1` / `trade_as_2`)
 on the strategy node; the portfolio node supplies `uid`, `name`, `account_code`,
-`max_pairs_open`, `master_status`, `pdt_rules`, `account_alloc`, `features` and the
-`strategies` array.
+`max_pairs_open`, `master_status`, `pdt_rules`, `account_alloc` and the
+`strategies` array. `PortfolioImporter.REQUIRED_PORTFOLIO_FIELDS` /
+`REQUIRED_STRATEGY_FIELDS` list exactly the fields an imported file must supply —
+everything above except the RSI filter pair (which `updateFromJson()` defaults)
+and the three state fields (which the importer strips rather than requires). On
+import, `uid` is regenerated for the portfolio and every strategy and
+`account_code` is cleared, regardless of what the file contained.
 
-### 6.3 Interactive Brokers
+### 6.2 Interactive Brokers
 
 | Aspect | Value |
 |---|---|
@@ -322,29 +348,6 @@ for CFD-traded pairs.
 | `≥ 1100 && < 2100` | logged as warning |
 | `≥ 2100` | logged as notice; also treated as evidence the session is live |
 | `≥ 1000` | ignored by `ConfinedEngine` (not order-related) |
-
-### 6.4 PTL AMQP event bus
-
-| Aspect | Value |
-|---|---|
-| Host | `amqp.pairtradinglab.com`, TLS (`factory.useSslProtocol()`), vhost `/` |
-| Credentials | PTL access key / secret key |
-| Outbound exchange | `ptl.clients`, routing key = simple class name of the event |
-| Message properties | `content-type: application/json`, `user-id: <accessKey>`; important events additionally `deliveryMode = 2` |
-| Retry | important events retry every 20 s until published; unimportant events are dropped when the connection is down |
-| Reconnect throttle | at most one connect attempt per 30 s |
-| Inbound | exclusive server-named queue bound to exchange `ptl.<accessKey>`; messages are consumed, logged and acked — **no dispatch is implemented yet** |
-
-Event types published — these are exactly the events `AmqpProxy` subscribes to:
-`TransactionEvent`, `HistoryEntry`, `MonitorEvent`, `TestEvent` and
-`ImportantTestEvent`.
-
-`MonitorEvent` is the heartbeat, emitted every minute with a status bitmask:
-
-| Bit | Meaning |
-|---|---|
-| `1` | `STATUS_IB_NOT_CONNECTED` |
-| `2` | `STATUS_INTERVENTIONS_PENDING` |
 
 ---
 
@@ -432,9 +435,10 @@ closest to that target is selected, and its β/α/σ drive the live score. Entry
 `PairTradingModelKalmanAuto` and `PairTradingModelKalmanGrid` implement
 `LockableStateModel`. When a pair position is fully opened, the engine captures
 `getCurrentState()` (for Kalman-auto: the selected sub-model id), locks the model to
-it, stores it on the strategy and pushes it to PTL. The position is therefore always
-exited on the same sub-model that entered it, even across a restart. The state is
-released on close, on an externally observed close, and on `resetState()`.
+it, stores it on the strategy and persists it to `strategy_state` via
+`PairStateUpdated`. The position is therefore always exited on the same sub-model
+that entered it, even across a restart. The state is released on close, on an
+externally observed close, and on `resetState()`.
 
 ### 7.6 Position sizing
 
@@ -528,8 +532,11 @@ excluding Saturday and Sunday:
 
 ### 9.3 What triggers manual intervention
 
-`requestManualIntervention(reason)` blocks the pair, marks it inactive and reports
-the reason to PTL. Triggers:
+`requestManualIntervention(reason)` blocks the pair, marks it inactive, logs
+`"pair blocked for auto execution, reason: <reason>"` and posts a
+`ManualInterventionRequested` event (see `ARCHITECTURE.md` §11 — nothing
+aggregates it today, but the reason is always in the log and the pair's
+`coreStatus`). Triggers:
 
 * leg position mismatch against IB that is not explainable as a split or an external
   close;
@@ -559,15 +566,19 @@ the check passes.
 ./gradlew test          # or ./gradlew build
 ```
 
-103 JUnit 4 test methods, Mockito for the IB socket, event bus, and logger
-collaborators. Coverage is deliberately concentrated where the money is:
+153 JUnit 4 test methods, Mockito for the IB socket, event bus, and logger
+collaborators. Coverage is deliberately concentrated where the money is, plus the
+persistence seam that replaced PTL:
 
 | Area | Tests |
 |---|---|
 | `ConfinedEngineTest` | 18 — order flow, fills, commission/transaction assembly, position sync, error handling |
 | Model logic | `PairTradingModelRatioTest` (9), `…ResidualTest` (9), `…KalmanAutoTest` (9), `…KalmanGridTest` (10) |
 | `kernelfx` | `SubModelKalman*Test`, `OlsCellTest`, `SharpeCellTest`, `SimpleCellTest`, `MemoryCellTest`, `PairPositionTest`, `PerfTracker*Test`, `UsageTrackerTest`, `SimpleStrategyTest` |
-| Providers / model / utils | `PairDataProviderTest`, `HistoricalDataProviderTest`, `PortfolioTest`, `MultiRatioTest`, `StringXorProcessorTest` |
+| Providers / model | `PairDataProviderTest`, `HistoricalDataProviderTest`, `PortfolioTest`, `MultiRatioTest` |
+| Serialization | `SerializationRoundTripTest` (6) — the annotation regression test described in the notes below |
+| `store` | `DatabaseTest` (5, schema/migration), `SqlitePortfolioStoreTest` (9, CRUD against a temp file DB), `PortfolioDocumentsTest` (7, build/splice), `PortfolioImporterTest` (14, validation/uid regeneration/rejection), `HistoryPersistenceTest` (5, insert + startup backfill) |
+| `DataDirectoryTest` | 7 — per-platform path resolution |
 
 Conventions worth following when adding tests:
 
@@ -577,6 +588,11 @@ Conventions worth following when adding tests:
   the test lives in the same package) rather than through `PairTradingCore`, which
   keeps tests single-threaded and deterministic.
 * `PairStrategy.injectCore()` exists solely so tests can install a mock core.
+* A field added to `PairStrategy` that is missing `@JsonProperty` fails **no
+  test** unless it is also named in `SerializationRoundTripTest`'s `TEXT_FIELDS`
+  or `NUMERIC_FIELDS` — the field simply reverts to its default on the next
+  restart, silently changing how a strategy trades. Add any new field to those
+  lists in the same commit; see §12, "Adding a trading model".
 
 Because this software trades other people's money, the project asks for a strict
 review process on pull requests (see `README.md`); a change to signal generation,
@@ -619,37 +635,38 @@ order handling or position reconciliation is expected to arrive with tests.
 3. Add any new parameters to `PairStrategy` (with `@JsonProperty`/`@JsonIgnore` as
    appropriate) and to `updateFromJson()`, keeping them in the
    "only while `core == null`" block.
-4. If the model selects among sub-models, implement `LockableStateModel` and a
+4. **New parameters need `@JsonProperty` with the document field name, or they
+   will not persist** — they will silently revert to their default on the next
+   restart. They must also be added to
+   `PortfolioImporter.REQUIRED_STRATEGY_FIELDS` (§6.1) so an imported file that
+   omits them is rejected rather than accepted with a default, and to
+   `SerializationRoundTripTest`'s `TEXT_FIELDS`/`NUMERIC_FIELDS` (§10) so a missing
+   annotation fails a test instead of failing silently.
+5. If the model selects among sub-models, implement `LockableStateModel` and a
    matching `AbstractPairTradingModelState` subclass so open positions survive a
    restart.
-5. Expose the parameters in the UI via WindowBuilder and bind them in
+6. Expose the parameters in the UI via WindowBuilder and bind them in
    `initDataBindings()`.
-6. Add unit tests covering `setPrices`, `entryLogic`, `exitLogic` and
+7. Add unit tests covering `setPrices`, `entryLogic`, `exitLogic` and
    `getLookbackRequired`.
 
-### Replacing the portfolio source
+### Adding an import format
 
-The README explicitly invites forks that load portfolios from, say, CSV instead of
-PTL. The seam is narrow:
-
-* `PtlApiClient.loadPortfolios()` → `PortfolioList.updateFromJson(JsonNode)` →
-  `PortfolioList.initialize()` — supply an equivalent `JsonNode` (or bypass it and
-  build `Portfolio`/`PairStrategy` objects through the factories directly), then
-  post `PtlApiConnect` if you still want the AMQP telemetry path;
-* the write path (`PortfolioSyncOutRequest`, `StrategySyncOutRequest`,
-  `PairStateUpdated`) must be re-pointed or dropped — but note that
-  `last_model_state` and `last_opened_datetime` need to be persisted *somewhere*,
-  otherwise Kalman strategies cannot correctly resume an open position after a
-  restart.
-
-Whatever the source, the GNU GPL v3 terms still apply to the derived work.
+The seam for loading portfolios from something other than a `PortfolioStore`
+export is `PortfolioImporter.parse(json, mapper)`, called by
+`Application.importPortfolio()` after the user picks a file. It returns a list of
+validated, freshly re-uid'd `ObjectNode` documents ready for
+`PortfolioStore.insertPortfolioDocument()`; nothing is inserted unless every
+portfolio and strategy in the file validates. To accept a different file format,
+write an adapter that produces the same document shape (§6.1) and either extend
+`PortfolioImporter.parse()` to recognise it or add a second entry point that
+converts to it before calling `prepare()`. Whatever the source, the GNU GPL v3
+terms still apply to the derived work.
 
 ### Adding a bus event
 
 Define an immutable event class in `events/` or `trading/events/`, post it with
-`bus.post(...)`, and add `@Subscribe` handlers. If it should reach PTL, add a
-handler in `AmqpProxy` and mark the class `ImportantEvent` (guaranteed delivery)
-and/or `ConfidentialEvent` (suppressed in confidential mode) as appropriate.
+`bus.post(...)`, and add `@Subscribe` handlers.
 
 ---
 
@@ -660,12 +677,15 @@ and/or `ConfidentialEvent` (suppressed in confidential mode) as appropriate.
 | "already running for profile" on startup | another instance holds the JUnique lock; use a different profile or kill the other process |
 | Build fails resolving SWT natives | wrong/absent `-PforceArch`; run `./gradlew swtDiag` |
 | macOS: app exits immediately at launch | missing `-XstartOnFirstThread` |
-| `NoSuchMethodError` / reflection errors from HTTP or TLS | missing `--add-opens` flags (§4) |
+| `NoSuchMethodError` / reflection errors from networking or TLS | missing `--add-opens` flags (§4) |
 | IB connection refused with a version message | TWS/Gateway API older than server version 66 |
 | Pair stuck at `wait for portfolio` | no `updatePortfolio` callback for those contracts yet — check the account code binding and that TWS has the account subscribed |
 | Pair stuck at `no activity at the exchange` | `ActivityDetector` has no recent `LAST` tick for SPY/BAC/QQQ/SILV; usually a market-data subscription or feed problem |
 | Pair stuck at `wait for slot` | portfolio slot budget exhausted — check `max_pairs_open` and each strategy's `slot_occupation` |
 | Pair stuck at `wait for manual intervention` | read the log for the `pair blocked for auto execution, reason:` line, fix the underlying cause, then Resume |
 | Repeated `historical data request failed` | IB pacing violations or missing historical-data permissions; retries are 11 minutes apart by design |
-| Trades appear in IB but not on PTL | check the AMQP connection state and the `rq-worker` log lines; confidential mode also suppresses trade telemetry |
-| Log file not where expected | it is `${user.home}/Application Data/PTLTrader/<profile>.log` on every platform (§5.3) |
+| "Local Database Error" dialog at startup | the database could not be opened or migrated (e.g. an unreadable file, a permissions problem, or `PRAGMA` failure) — check the log; `Status.storeReady` stays `false` and nothing is loaded |
+| Database appears locked / writes keep failing | another process has the file open — check for a second instance under a different launch method; single-instance enforcement (§4.2) should prevent this within the app itself |
+| "database … was written by a newer version of PTL Trader" | the database's `schema_version` is higher than this build's `Database.SCHEMA_VERSION`; use the newer build, or a fresh profile |
+| Portfolios/strategy changes not surviving a restart | check the log for `database write failed` / `database write permanently failed` (`ARCHITECTURE.md` §8.4) — a write is retried 3 times, then given up on and reported via `StoreProblem` |
+| Log file not where expected | it is `<data directory>/<profile>.log` (§5) — not `${user.home}/Application Data/…` on Linux/macOS, that was fixed by `DataDirectory` |

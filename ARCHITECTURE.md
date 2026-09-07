@@ -14,18 +14,16 @@ All code references use `path:line`-style package/class names from
 
 PTL Trader is a **single-process, single-user desktop application** that runs
 automated pair-trading strategy portfolios against an Interactive Brokers account.
-It is not a server: there is no embedded database, no scheduler daemon and no
-inter-process API. All persistent strategy state lives on the Pair Trading Lab
-(PTL) servers; the application holds an in-memory working copy and synchronises it
-back.
+It is not a server: there is no scheduler daemon and no inter-process API. All
+persistent strategy state lives in a local SQLite database that the application
+owns outright; the application holds an in-memory working copy and synchronises it
+back to that database.
 
-Three external systems bound the design:
+One external system bounds the design:
 
 | System | Protocol | Purpose |
 |---|---|---|
 | IB Trader Workstation / IB Gateway | IB API over TCP (`EClientSocket` / `EWrapper`) | market data, historical bars, account & position updates, order submission |
-| Pair Trading Lab REST API | HTTPS + HTTP Basic auth | load portfolios/strategies/histories, push back mutated strategy state |
-| Pair Trading Lab event bus | AMQP over TLS (RabbitMQ) | telemetry: trades, transactions, P/L, heartbeat/monitoring |
 
 The application must keep running unattended for weeks with real money at stake, so
 the architecture is built around three recurring themes: **thread confinement of
@@ -39,23 +37,19 @@ flowchart LR
         MODEL["Observable model<br/>Portfolio / PairStrategy / Account"]
         CORES["Trading cores<br/>1 thread per pair"]
         IB["SimpleWrapper<br/>IB API adapter"]
-        API["PtlApiClient"]
-        AMQP["AmqpEngine + AmqpProxy"]
+        STORE["SqlitePortfolioStore"]
         BUS(("Guava<br/>AsyncEventBus"))
     end
     TWS["IB TWS / Gateway"]
-    PTLAPI["api.pairtradinglab.com"]
-    PTLMQ["amqp.pairtradinglab.com"]
+    DB[("SQLite<br/>&lt;profile&gt;.db")]
 
     UI --- BUS
     MODEL --- BUS
     CORES --- BUS
     IB --- BUS
-    API --- BUS
-    AMQP --- BUS
+    STORE --- BUS
     IB <--> TWS
-    API <--> PTLAPI
-    AMQP --> PTLMQ
+    STORE <--> DB
 ```
 
 ---
@@ -66,8 +60,9 @@ The code is organised by responsibility rather than by feature.
 
 | Package | Role |
 |---|---|
-| `com.pairtradinglab.ptltrader` | Application entry point, DI wiring, cross-cutting infrastructure (`Beacon`, `SystemMonitor`, `LoggerFactoryImpl`, `ActiveCores`, `RuntimeParams`, `StringXorProcessor`), PTL REST client, AMQP engine and proxy |
-| `…​.events` | Application-level events posted on the bus (connection state, log lines, sync-out requests, monitoring) |
+| `com.pairtradinglab.ptltrader` | Application entry point, DI wiring, cross-cutting infrastructure (`Beacon`, `DataDirectory`, `LoggerFactoryImpl`, `ActiveCores`, `RuntimeParams`), plus the small dialogs that drive local portfolio management (`AddPairDialog`, `NewPortfolioDialog`) |
+| `…​.store` | Local persistence: `Database` (schema + migrations), `SqlitePortfolioStore` (the `PortfolioStore` implementation, `db-worker` thread), `PortfolioImporter`, `PortfolioDocuments`, `StrategyState`, `StoreError` |
+| `…​.events` | Application-level events posted on the bus (connection state, log lines, sync-out requests, store problems) |
 | `…​.model` | Observable domain beans: `PortfolioList`, `Portfolio`, `PairStrategy`, `Position`, `Account`/`AccountList`, `Settings`, `Status`, `TradeHistory`, `LegHistory`, `LogEntryList` — plus JFace `converter`/`validator` helpers |
 | `…​.ib` | IB API adapter: `SimpleWrapper` (implements `EWrapper`), `HistoricalDataRequest` |
 | `…​.trading` | The trading engine: `PairTradingCore`, `ConfinedEngine`, the `PairTradingModel` family, data providers, `ActivityDetector`, `ContractExt`, `CoreStatus` |
@@ -83,8 +78,8 @@ The code is organised by responsibility rather than by feature.
 * The **trading layer never touches SWT**. It communicates results by mutating
   model beans (which fire `PropertyChangeEvent`s that data binding picks up) and by
   posting events on the bus.
-* The **UI layer never calls IB or PTL directly** — it posts events or calls the
-  facade methods on `PtlApiClient` / `SimpleWrapper`.
+* The **UI layer never touches IB or the database directly** — it posts events or
+  calls the facade methods on `PortfolioStore` / `SimpleWrapper`.
 
 ---
 
@@ -118,18 +113,18 @@ Three things are worth knowing:
    The list/map shape anticipates multiple simultaneous IB connections; today
    exactly one `SimpleWrapper` is created and stored at index 0.
 3. **`Startable` drives the lifecycle.** `pico.start()` starts every component
-   implementing `org.picocontainer.Startable` — `Settings` (loads preferences),
-   `SimpleWrapper` (starts the historical-request worker, loads IB preferences),
-   `Beacon` (starts the minute timer), `SystemMonitor`, `MarketDataProvider`,
-   `ActivityDetector`, `PtlApiClient`, `AmqpEngine`, `AmqpProxy`. `pico.stop()`
-   unwinds them at shutdown.
+   implementing `org.picocontainer.Startable` — `Settings` (currently a no-op; kept
+   as an extension point), `SimpleWrapper` (starts the historical-request worker,
+   loads IB preferences), `Beacon` (starts the minute timer), `MarketDataProvider`,
+   `ActivityDetector`, `SqlitePortfolioStore` (opens and migrates the database,
+   loads portfolios and history). `pico.stop()` unwinds them at shutdown.
 
 Objects that are created *per portfolio* or *per strategy* are not container
 components; they are built by hand-written factories that carry the injected
 dependencies forward:
 
 ```
-PortfolioFactoryImpl      → Portfolio          (per PTL portfolio)
+PortfolioFactoryImpl      → Portfolio          (per stored portfolio)
 PairStrategyFactoryImpl   → PairStrategy       (per pair in a portfolio)
 PairTradingCoreFactoryImpl→ PairTradingCore    (per bound, active strategy)
                             + PairTradingModel (chosen from PairStrategy.model)
@@ -162,25 +157,20 @@ Consequences that shaped the rest of the design:
 
 | Event | Posted by | Main consumers |
 |---|---|---|
-| `BeaconFlash` | `Beacon`, every minute on the minute | every `PairTradingCore`, `Portfolio`, `SystemMonitor` |
+| `BeaconFlash` | `Beacon`, every minute on the minute | every `PairTradingCore`, `Portfolio`, `PairStrategy` |
 | `Tick`, `TickSize`, `GenericTick` | `SimpleWrapper` (EReader thread) | `PairTradingCore`, `ActivityDetector` |
 | `PortfolioUpdate` | `SimpleWrapper.updatePortfolio` | `PairTradingCore` (filtered by account + contract) |
 | `OrderStatus`, `ExecutionEvent`, `CommissionEvent`, `Error` | `SimpleWrapper` | `PairTradingCore`, `HistoricalDataProvider`, `MarketDataProvider` |
 | `Connected` / `Disconnected` / `IbConnectionFailed` / `AccountConnected` | `SimpleWrapper` | `Application`, cores, `MarketDataProvider`, `ActivityDetector` |
 | `PairDataReady` / `PairDataFailure` | `PairDataProvider` | owning `PairTradingCore` (matched on request id) |
 | `EquityChange` | `SimpleWrapper` | `Portfolio` (money management) |
-| `TransactionEvent`, `HistoryEntry`, `MonitorEvent` | `ConfinedEngine`, `SystemMonitor` | `AmqpProxy` (→ PTL), `TradeHistory`, `LegHistory` |
+| `TransactionEvent`, `HistoryEntry` | `ConfinedEngine` | `SqlitePortfolioStore` (→ `leg_history` / `trade_history`), `TradeHistory`, `LegHistory` |
 | `StrategyPlUpdated` | `ConfinedEngine` | *(no subscriber today — posted for future use)* |
-| `PortfolioSyncOutRequest` / `StrategySyncOutRequest` / `PairStateUpdated` | `Portfolio`, `PairStrategy`, `ConfinedEngine` | `PtlApiClient` |
-| `ManualInterventionRequested` / `ResumeRequest` | `ConfinedEngine`, UI | `SystemMonitor`, target core |
+| `PortfolioSyncOutRequest` / `StrategySyncOutRequest` / `PairStateUpdated` | `Portfolio`, `PairStrategy`, `ConfinedEngine` | `SqlitePortfolioStore` |
+| `ManualInterventionRequested` | `ConfinedEngine` | *(no subscriber today — see §11)* |
+| `ResumeRequest` | UI | target core |
+| `StoreProblem` | `SqlitePortfolioStore` | `Application` (error dialogs) |
 | `LogEvent` | everywhere | `LogEntryList` (UI log table) |
-
-Two marker interfaces modulate how telemetry is treated downstream:
-
-* `ImportantEvent` — published to AMQP with persistent delivery mode and an
-  indefinite retry loop (20 s backoff) until it is accepted.
-* `ConfidentialEvent` — suppressed entirely when the user enables *confidential
-  mode*, so P/L and equity figures never leave the machine.
 
 ---
 
@@ -196,9 +186,7 @@ every thread the application creates.
 | `<account>_<SYM1>_<SYM2>` (one per active pair) | `PairTradingCore` | runs `ConfinedEngine.handleMessage()` in a loop |
 | IB `EReader` | IB API client library | inbound IB socket decoding; calls `SimpleWrapper` `EWrapper` methods |
 | `hist-worker` | `SimpleWrapper` | drains `histRequestQueue`, one historical request per second (IB pacing) |
-| `rq-worker` | `PtlApiClient` | drains the PUT/DELETE queue with retry-until-success |
-| `async-http-N` | `PtlApiClient` | AsyncHttpClient (ning) worker pool |
-| `amqp` | `AmqpEngine` | confines the RabbitMQ connection/channel to one thread |
+| `db-worker` | `SqlitePortfolioStore` | owns the one JDBC connection; drains the write queue (3 attempts, then gives up) and runs every read |
 | `beacon-0` | `Beacon` | scheduled minute tick |
 | IB retry scheduler | `SimpleWrapper` | reconnect attempt every 45 s after connection loss |
 | shutdown hook | `SimpleWrapper.attachDisconnectHook` | `eDisconnect()` on JVM exit |
@@ -389,7 +377,7 @@ sequenceDiagram
 A `TransactionEvent` is emitted only when **both** conditions hold: the order was
 reported completely filled *and* every execution belonging to it has produced a
 commission report. `HistoryEntry` waits for both legs. This two-phase confirmation
-is what makes the telemetry sent to PTL reconcilable with the broker statement.
+is what makes the recorded history reconcilable with the broker statement.
 
 ### 7.4 Failure handling and the "blocked" state
 
@@ -455,8 +443,9 @@ Two design details matter architecturally:
   chosen sub-model drifted while a position were open, entry and exit would be
   judged by different yardsticks. So when a pair position completes,
   `checkNewPosition()` captures the model state and locks it; the state is stored on
-  `PairStrategy` and synchronised to PTL via `PairStateUpdated`, so it survives a
-  restart. On close (or on an externally observed close) the model is unlocked.
+  `PairStrategy` and persisted to `strategy_state` via `PairStateUpdated`, so it
+  survives a restart. On close (or on an externally observed close) the model is
+  unlocked.
 * **`kernelfx` is a numeric island.** It has no dependency on the bus, the model
   layer or IB — only on EJML. It is a direct port of the backtesting kernel used by
   Pair Trading Lab, which is why its style (integer-indexed arrays, ring-buffer
@@ -524,41 +513,51 @@ Freshness is date-based, not age-based: `histDataReady()` re-requests whenever t
 current calendar day (in the strategy's timezone) differs from the day the data was
 obtained.
 
-### 8.4 PTL REST client
+### 8.4 Local storage — `SqlitePortfolioStore`
 
-`PtlApiClient` uses the ning AsyncHttpClient with preemptive HTTP Basic auth
-(access key / secret key) and an `X-PTL-Version` header. Reads (`loadPortfolios`,
-`loadTransactionHistories`, `loadPairTradeHistories`) are fire-and-forget async
-calls whose completion handlers feed the model. Writes (`PUT /portfolios/{uid}`,
-`PUT /strategies/{uid}`, `DELETE /strategies/{uid}`) are placed on a queue drained
-by `rq-worker`, which retries **indefinitely** at 10 s intervals until the server
-answers 200 — deliberately, because losing a strategy-state update would leave PTL
-and the trader disagreeing about open positions.
+`SqlitePortfolioStore` is the `PortfolioStore` implementation and the direct
+replacement for the old REST client and telemetry path. It is a PicoContainer
+`Startable`, injected wherever `PtlApiClient` used to be, and it subscribes to the
+same sync-out events plus the two events that used to reach PTL only via AMQP:
 
-Sync-out is driven by dirty flags rather than by explicit calls: model setters mark
-the bean dirty, and on each `BeaconFlash` a dirty `Portfolio`/`PairStrategy` posts
-a `…SyncOutRequest` that the client turns into a PUT. `updateFromJson()` disables
-sync-out while it applies server state, so inbound updates never echo back.
+| Old path | Now |
+|---|---|
+| `GET /portfolios` on connect | `load()` in `start()`: read every `portfolios.document`, splice in `strategy_state`, feed `PortfolioList.updateFromJson()` + `initialize()` |
+| `GET /transactionhistories` / `GET /pairtradehistories` | `loadHistories()`: most recent 1000 rows of `leg_history` / `trade_history` |
+| `PUT /portfolios/{uid}` / `PUT /strategies/{uid}` on `…SyncOutRequest` | upsert the portfolio's JSON document |
+| `PUT /strategies/{uid}` on `PairStateUpdated` | upsert a row in `strategy_state` |
+| AMQP telemetry from `TransactionEvent` / `HistoryEntry` | insert a row into `leg_history` / `trade_history` |
 
-### 8.5 Telemetry — `AmqpProxy` + `AmqpEngine`
+**Threading.** A single `db-worker` thread owns the one JDBC connection, exactly as
+`rq-worker` once confined HTTP writes; bus threads never touch JDBC. Writes are
+queued with `enqueue()` (a bounded `LinkedBlockingQueue`, capacity 4096) and run on
+`db-worker`; reads such as `load()` use `runOnWorker()`, which blocks the calling
+thread on a latch until `db-worker` has produced a result, so every use of the
+connection — read or write — stays confined to that one thread.
 
-`AmqpProxy` subscribes to the events worth reporting — `TransactionEvent`,
-`HistoryEntry`, `MonitorEvent` and the two test events — applies the
-confidential-mode filter, serialises with Jackson, and re-posts a `SerializedEvent`
-carrying the JSON, the originating class's simple name and an importance flag.
+**Retry policy.** Unlike `rq-worker`'s indefinite retry against a flaky network, a
+queued write is attempted at most `WRITE_ATTEMPTS` (3) times, with a short backoff
+between attempts. On the third failure the store logs at `ERROR`, posts a
+`LogEvent` (visible in the Log tab) and a `StoreProblem(IO_FAILURE)`, and gives up
+— retrying forever would only hide a failing disk. `flush()` (used by import/export
+and at shutdown) blocks until the queue is drained, with the same bounded timeout.
 
-`AmqpEngine` confines the RabbitMQ connection to its own thread behind another
-`LinkedTransferQueue`. It publishes to exchange `ptl.clients` with the class name as
-routing key, sets `userId` to the PTL access key, and uses persistent delivery plus
-an unbounded 20 s retry loop for important events (unimportant ones are dropped if
-the connection is down). It also declares an exclusive input queue bound to
-`ptl.<accessKey>` — the inbound path is wired and consuming but currently only logs,
-i.e. it is a reserved channel for future server-initiated commands.
+**Startup and shutdown order.** `start()` opens and migrates the database, then
+calls `load()` and `loadHistories()`, and only then registers on the bus — in that
+order, so a `PairStateUpdated` or `…SyncOutRequest` arriving during startup can
+never race the initial load, and a live `TransactionEvent`/`HistoryEntry` during
+startup can't be double-counted by `loadHistories()`. History backfill is
+deliberately its own step rather than part of `load()`: portfolio import calls
+`flush()` then `load()` to refresh the UI, and `TradeHistory`/`LegHistory` do not
+deduplicate, so folding backfill into `load()` would re-append history rows on
+every import. `stop()` unregisters from the bus, flushes, interrupts and joins
+`db-worker`, then closes the database.
 
-`SystemMonitor` supplies the heartbeat: on every beacon it posts a `MonitorEvent`
-with hostname, profile, a status bitmask (IB disconnected / interventions pending)
-and the list of outstanding interventions, so PTL's monitoring can alert on a
-trader that has gone quiet or stuck.
+Sync-out is still driven by dirty flags rather than by explicit calls, unchanged
+from the PTL era: model setters mark the bean dirty, and on each `BeaconFlash` a
+dirty `Portfolio`/`PairStrategy` posts a `…SyncOutRequest` that the store turns
+into an upsert. `updateFromJson()` still disables sync-out while it applies loaded
+state, so inbound updates never echo back.
 
 ---
 
@@ -571,36 +570,42 @@ main()
  ├ JUnique.acquireLock("…Application.<profile>")   ← one instance per profile
  ├ Realm.runWithDefault(SWT realm)
  ├ build Pico container, resolve Application, pico.start()
+ │   └ SqlitePortfolioStore.start(): open + migrate DB,
+ │       load() → PortfolioList.updateFromJson() + initialize(),
+ │       loadHistories(), then bus.register(this)
  ├ window.open()  → createContents(), data bindings, SWT event loop
- └ on shell activation, if -autostart: connectToPtl()
+ │   └ if !Status.storeReady: "Local Database Error" dialog
+ └ on shell activation, if -autostart: connectToIb()
 ```
 
-### 9.2 Going live
+`Portfolio.initialize()` → `PairStrategy.initialize()` → `bind()`, called from
+`load()` above, is what actually spins up trading: a strategy whose portfolio has a
+non-empty `accountCode` (persisted in its document from a previous run) gets a
+`PairTradingCore`, which registers on the bus, starts its thread and reports
+`PENDING` until the first portfolio updates arrive (`NOT_READY` → ready). This
+happens during `pico.start()`, before the window even opens — it no longer waits
+for a server round trip, only for IB.
+
+### 9.2 Connecting to IB
 
 ```mermaid
 sequenceDiagram
     participant U as User / autostart
     participant A as Application
-    participant P as PtlApiClient
-    participant M as AmqpEngine
     participant W as SimpleWrapper
     participant S as PairStrategy
-    U->>A: Connect to PTL
-    A->>P: loadPortfolios / histories
-    P->>P: PortfolioList.updateFromJson + initialize()
-    P-->>M: PtlApiConnect
-    M->>M: connect to amqp.pairtradinglab.com
-    M-->>A: AmqpConnect
-    A->>W: connectToIb() (only if autostart)
+    U->>A: shell activated (or -autostart)
+    A->>W: connectToIb()
     W-->>A: Connected / AccountConnected
-    Note over S: portfolios bound to an account create<br/>and start a PairTradingCore per pair
+    Note over S: strategies already bound to this account<br/>(loaded from the database at startup)<br/>begin receiving portfolio updates
     S->>S: core.start() → TYPE_START → ConfinedEngine.start()
 ```
 
-`Portfolio.initialize()` → `PairStrategy.initialize()` → `bind()` is what actually
-spins up trading: a strategy whose portfolio has a non-empty `accountCode` gets a
-`PairTradingCore`, which registers on the bus, starts its thread and reports
-`PENDING` until the first portfolio updates arrive (`NOT_READY` → ready).
+By the time IB connects, every portfolio and strategy is already loaded and any
+previously-bound `PairTradingCore`s are already running and waiting
+(`NOT_READY`/`PENDING`) — see §9.1. Connecting to IB is what lets them start
+receiving `PortfolioUpdate`/`Tick` and progress past `NOT_READY`; it is not what
+creates them.
 
 ### 9.3 A trade, end to end
 
@@ -613,9 +618,9 @@ BeaconFlash / Tick
    → allocateMargin() + model.calcLegQtys() size both legs
    → two MKT orders under the order-id lock
    → OrderStatus(Filled) ×2  → checkNewPosition() → status LONG, model state locked
-   → PairStateUpdated → PtlApiClient PUT /strategies/{uid}
+   → PairStateUpdated → SqlitePortfolioStore upsert into strategy_state
    → ExecutionEvent + CommissionReport ×n → TransactionEvent ×2 → HistoryEntry
-   → AmqpProxy → AmqpEngine → ptl.clients
+   → SqlitePortfolioStore inserts leg_history / trade_history rows
 ```
 
 ### 9.4 Shutdown
@@ -631,11 +636,10 @@ shutdown.
 
 ## 10. Cross-cutting concerns
 
-**Configuration and secrets.** `Settings` and `SimpleWrapper` persist to
-`java.util.prefs` under profile-scoped nodes. The PTL secret key is stored
-XOR-masked with a hard-coded key and Base64-encoded (`StringXorProcessor`) — this
-is obfuscation, not encryption, and is documented as such in
-[TECHNICAL.md](TECHNICAL.md).
+**Configuration.** `SimpleWrapper` persists IB connection settings to
+`java.util.prefs` under a profile-scoped node. There are no secrets to store: the
+PTL access/secret key pair and its obfuscated storage (`StringXorProcessor`) are
+gone along with the REST client they authenticated.
 
 **Logging.** `LoggerFactoryImpl` configures log4j once (double-checked lazily) with
 a console appender plus a rolling file appender, and hands out one logger per
@@ -644,13 +648,8 @@ multi-pair log readable. `LogEvent` is the user-facing mirror of the same
 information, rendered in the UI log table.
 
 **Multi-instance.** Profiles (`args[0]`) scope the JUnique lock, the preferences
-nodes and the log file, so several independent traders can run on one machine
-against different accounts.
-
-**Feature gating.** `SupportedFeatures` lists the strategy features this build
-understands (`RESEM`, `RSI1`, `REVERSALS`, `CUSTOM_DTICK`). A strategy or portfolio
-carrying an unknown feature is refused rather than approximated — a client that is
-older than the strategy definition it was handed must not trade it.
+nodes, the database and the log file, so several independent traders can run on
+one machine against different accounts, each with its own `<profile>.db`.
 
 ---
 
@@ -668,12 +667,18 @@ for oversights:
   NYSEARCA, NYSEAMEX and NYSEMKT and hard-codes USD; anything else throws.
 * **Daily bars only.** Models are re-fitted once per trading day; intraday
   behaviour is driven purely by live bid/ask against that day's fit.
-* **PTL is the system of record.** There is no local persistence of portfolios or
-  strategies; without the PTL API the application has nothing to trade. (The README
-  explicitly invites forks that load portfolios from CSV instead — the seam is
-  `PtlApiClient` plus `PortfolioList.updateFromJson`.)
+* **The local SQLite database is the system of record.** There is no in-application
+  migration from the retired Pair Trading Lab service: users export a JSON file
+  from the PTL website before it closes and use `File › Import Portfolio…` (see
+  [README.md](README.md#migrating-from-pair-trading-lab)). The seam for a
+  different source is `PortfolioStore` plus `PortfolioList.updateFromJson`.
 * **`Application` mixes UI construction with orchestration.** It is ~2 400 lines,
   largely WindowBuilder-generated; `createContents()` and `initDataBindings()`
   should be edited with WindowBuilder rather than by hand.
-* **The AMQP inbound channel is a stub.** It consumes and acknowledges but does not
-  dispatch.
+* **No aggregated view of pending manual interventions.** `SystemMonitor` was the
+  only subscriber of `ManualInterventionRequested` other than the `ConfinedEngine`
+  that still posts it; deleting `SystemMonitor` along with the PTL telemetry it
+  served dropped the only cross-portfolio aggregate of interventions pending. The
+  UI never displayed that aggregate — it shows per-pair `coreStatus` and
+  `resumable` — so nothing regresses visibly, but the capability itself is gone,
+  not re-homed.
