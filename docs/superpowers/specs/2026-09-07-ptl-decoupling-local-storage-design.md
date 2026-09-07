@@ -161,7 +161,7 @@ CREATE TABLE portfolios (
 CREATE TABLE strategy_state (
   strategy_uid         TEXT PRIMARY KEY,
   portfolio_uid        TEXT NOT NULL REFERENCES portfolios(uid) ON DELETE CASCADE,
-  last_opened_datetime TEXT,         -- ISO-8601, UTC
+  last_opened_datetime TEXT,         -- 'yyyy-MM-dd HH:mm:ss', UTC
   last_opened_equity   REAL,
   last_model_state     TEXT,         -- polymorphic JSON, as PTL stored it
   updated_at           TEXT NOT NULL
@@ -199,6 +199,15 @@ CREATE TABLE leg_history (
 CREATE INDEX ix_trade_history_dt ON trade_history (datetime DESC);
 CREATE INDEX ix_leg_history_dt   ON leg_history (datetime DESC);
 ```
+
+**`last_opened_datetime` format.** It is `yyyy-MM-dd HH:mm:ss` in UTC — the
+format `PairStrategy.updateFromJson()` parses, not ISO-8601. `StrategyState`
+writes it with that pattern and `updateFromJson` reads it back with
+`DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss").withZoneUTC()`. The two must
+match exactly and neither side may be changed alone: writing ISO-8601 here, or
+switching the writer to it to match an earlier draft of this section, would make
+every stored instant reparse as a different one and shift every `max_days` exit
+by the local UTC offset.
 
 History columns mirror the immutable fields of `TradeHistoryEntry` and
 `LegHistoryEntry`; the derived `*S` display strings are recomputed by the
@@ -328,7 +337,12 @@ p, stock1, stock2, tradeAs1, tradeAs2)` already exists and already mints a UUID.
 Symbols are validated through `ContractExt.createFromGoogleSymbol()` in the
 dialog, so an unsupported exchange fails at entry rather than at the first trade
 attempt. New strategies are created with `status` inactive so that adding a pair
-can never start trading it by surprise.
+can never start trading it by surprise. After `Portfolio.addPairStrategy(s)` — which
+only appends to the list and fires a property change — the flow calls
+`s.initialize()`, which registers the strategy's two `Position` objects on the bus
+and calls `bind()`; on a portfolio already bound to an account that is what creates
+and starts the trading core. Without it the new pair sits inert, with no z-score and
+no engine status, until the application is restarted.
 
 ## 8. Removal inventory
 
