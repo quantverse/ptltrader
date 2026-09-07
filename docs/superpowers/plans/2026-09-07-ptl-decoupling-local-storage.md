@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - **Build and test with JDK 11 at `/home/karlos/JDK/jdk-11.0.32.1+1`.** Every gradle command must be prefixed `JAVA_HOME=/home/karlos/JDK/jdk-11.0.32.1+1`. This is not optional: on the system default JDK 21, 61 of the 103 existing tests fail and `shadowJar` dies with `Unsupported class file major version 65`.
-- **Baseline is 103 passing tests.** Verify before starting: `JAVA_HOME=/home/karlos/JDK/jdk-11.0.32.1+1 ./gradlew test` must succeed. No task may reduce that number except where this plan explicitly deletes a test.
+- **Baseline is 102 passing tests** on JDK 11 (verified by summing `tests=` across `build/test-results/test/TEST-*.xml`: 102 tests, 0 failures, 0 errors, 0 skipped). Verify before starting: `JAVA_HOME=/home/karlos/JDK/jdk-11.0.32.1+1 ./gradlew test` must succeed. No task may reduce that number except where this plan explicitly deletes a test — Task 9 deletes `StringXorProcessorTest` (2 tests), and that is the only sanctioned reduction.
+  > Do not use the count printed by a JDK 21 run. On JDK 21 gradle reports "103 tests completed, 61 failed": the extra one is a synthetic `initializationError` from a class that fails to load, not a real test.
 - **Do not pass `--offline` on the first build after adding a dependency.** sqlite-jdbc is not in the local gradle cache and must be downloaded once.
 - **Dependency version is exactly `org.xerial:sqlite-jdbc:3.49.1.0`.** Verified working on JDK 11 with WAL, `synchronous=FULL`, foreign keys and `ON CONFLICT ... DO UPDATE` upsert syntax.
 - **Work on branch `v2`.** Do not merge to `master`.
