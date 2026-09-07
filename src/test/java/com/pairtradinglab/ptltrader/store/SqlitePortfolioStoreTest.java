@@ -24,6 +24,7 @@ import static org.mockito.Mockito.*;
 import java.io.File;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -31,8 +32,18 @@ import org.apache.log4j.Logger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.eventbus.EventBus;
+import com.pairtradinglab.ptltrader.LoggerFactory;
+import com.pairtradinglab.ptltrader.RuntimeParams;
+import com.pairtradinglab.ptltrader.events.StoreProblem;
+import com.pairtradinglab.ptltrader.model.LegHistory;
+import com.pairtradinglab.ptltrader.model.Portfolio;
+import com.pairtradinglab.ptltrader.model.PortfolioList;
+import com.pairtradinglab.ptltrader.model.Status;
+import com.pairtradinglab.ptltrader.model.TradeHistory;
 
 public class SqlitePortfolioStoreTest {
 
@@ -162,5 +173,96 @@ public class SqlitePortfolioStoreTest {
 		assertEquals(2, docs.size());
 		assertEquals("P1", mapper.readTree(docs.get(0)).get("uid").asText());
 		assertEquals("P2", mapper.readTree(docs.get(1)).get("uid").asText());
+	}
+
+	// ---- behavior of the instance itself, with mocked collaborators and no
+	// ---- db-worker thread started, covering the write-path fixes from review ----
+
+	private static final String PORTFOLIO_JSON = "{"
+		+ "\"uid\":\"P1\",\"name\":\"n\",\"account_code\":\"\","
+		+ "\"max_pairs_open\":10,\"master_status\":2,\"pdt_rules\":1,\"account_alloc\":100,"
+		+ "\"strategies\":[]}";
+
+	private SqlitePortfolioStore newUnstartedStore(EventBus bus, PortfolioList portfolioList) {
+		LoggerFactory lf = mock(LoggerFactory.class);
+		when(lf.createLogger(anyString())).thenReturn(mock(Logger.class));
+		RuntimeParams rp = new RuntimeParams(new String[] { "unittest" });
+		Status status = mock(Status.class);
+		LegHistory legHistory = new LegHistory();
+		TradeHistory tradeHistory = new TradeHistory();
+		// start() is deliberately never called: the db-worker thread never runs,
+		// exactly like the case where start() bailed out after a failed database open.
+		return new SqlitePortfolioStore(bus, lf, rp, portfolioList, status, legHistory, tradeHistory);
+	}
+
+	@Test
+	public void testEnqueueReportsFailureWhenWorkerNotRunning() throws Exception {
+		EventBus bus = mock(EventBus.class);
+		PortfolioList portfolioList = mock(PortfolioList.class);
+		SqlitePortfolioStore store = newUnstartedStore(bus, portfolioList);
+
+		LoggerFactory lf = mock(LoggerFactory.class);
+		when(lf.createLogger(anyString())).thenReturn(mock(Logger.class));
+		Portfolio p = new Portfolio(null, null, lf, "P1");
+		p.updateFromJson(mapper.readTree(PORTFOLIO_JSON));
+
+		// Previously this silently vanished: enqueue() just added to a queue that
+		// nobody was ever going to drain, with no log and no event.
+		store.savePortfolio(p);
+
+		ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+		verify(bus, atLeastOnce()).post(captor.capture());
+		assertTrue("expected an IO_FAILURE StoreProblem when the db-worker is not running",
+				containsIoFailure(captor.getAllValues()));
+
+		// flush() must report the not-running case too, rather than pretending
+		// every queued write was applied.
+		reset(bus);
+		store.flush();
+		ArgumentCaptor<Object> flushCaptor = ArgumentCaptor.forClass(Object.class);
+		verify(bus, atLeastOnce()).post(flushCaptor.capture());
+		assertTrue("expected flush() to report failure instead of returning silently",
+				containsIoFailure(flushCaptor.getAllValues()));
+	}
+
+	@Test
+	public void testBindPortfolioToAccountRejectsEmptyOrNullCode() throws Exception {
+		EventBus bus = mock(EventBus.class);
+		PortfolioList portfolioList = mock(PortfolioList.class);
+		when(portfolioList.getPortfolios()).thenReturn(Collections.<Portfolio>emptyList());
+		SqlitePortfolioStore store = newUnstartedStore(bus, portfolioList);
+
+		LoggerFactory lf = mock(LoggerFactory.class);
+		when(lf.createLogger(anyString())).thenReturn(mock(Logger.class));
+		Portfolio p = new Portfolio(null, null, lf, "P1");
+		p.updateFromJson(mapper.readTree(PORTFOLIO_JSON));
+
+		// Portfolio.accountCode defaults to "". Before the fix, an empty code
+		// matched every other unbound portfolio (a false BIND_DENIED against an
+		// empty list this is moot, but with no conflict it fell through to
+		// Portfolio.bind(""), which throws IllegalArgumentException uncaught).
+		store.bindPortfolioToAccount(p, "");
+		assertEquals("empty account code must not be bound", "", p.getAccountCode());
+
+		// A null code must not NPE at the equals() comparison either.
+		store.bindPortfolioToAccount(p, null);
+		assertEquals("null account code must not be bound", "", p.getAccountCode());
+
+		ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+		verify(bus, atLeastOnce()).post(captor.capture());
+		int bindDeniedCount = 0;
+		for (Object o : captor.getAllValues()) {
+			if (o instanceof StoreProblem && ((StoreProblem) o).error == StoreError.BIND_DENIED) {
+				bindDeniedCount++;
+			}
+		}
+		assertEquals("both the empty and the null code must be rejected as BIND_DENIED", 2, bindDeniedCount);
+	}
+
+	private static boolean containsIoFailure(List<Object> posted) {
+		for (Object o : posted) {
+			if (o instanceof StoreProblem && ((StoreProblem) o).error == StoreError.IO_FAILURE) return true;
+		}
+		return false;
 	}
 }

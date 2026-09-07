@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
@@ -66,10 +67,22 @@ import com.pairtradinglab.ptltrader.trading.events.PairStateUpdated;
  * db-worker thread owns the connection and drains a queue of writes, so bus
  * threads never touch JDBC. Unlike rq-worker it does not retry forever; against
  * a local file, endless retry would only hide a failing disk.
+ *
+ * Every use of the JDBC Connection - writes and reads alike - is confined to
+ * db-worker. Callers on other threads only ever enqueue a unit of work; where
+ * they need a result back (load()), they block on a latch for db-worker to
+ * finish it rather than touching the Connection themselves. That confinement
+ * is what makes Database's documented lack of thread-safety safe to rely on.
  */
 public class SqlitePortfolioStore implements PortfolioStore, Startable {
 
 	static final int WRITE_ATTEMPTS = 3;
+
+	/** How long a caller blocks in flush()/load() waiting for db-worker before giving up. */
+	static final long WORKER_AWAIT_TIMEOUT_MS = 30000L;
+
+	/** How long stop() waits for db-worker to terminate after being interrupted. */
+	static final long WORKER_JOIN_TIMEOUT_MS = 5000L;
 
 	private final EventBus bus;
 	private final Logger logger;
@@ -83,6 +96,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	private final BlockingQueue<Runnable> writeQueue = new LinkedBlockingQueue<Runnable>(4096);
 
 	private volatile Database database;
+	private volatile boolean busRegistered = false;
 
 	private final Thread writeQueueWorker = new Thread(new Runnable() {
 		@Override
@@ -93,6 +107,13 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 					break;
+				} catch (Throwable t) {
+					// A single bug or Error escaping runWithRetry must not silently kill
+					// this thread: that would turn every later write into the same silent
+					// loss that reportLostWork() exists to prevent, for the rest of the
+					// process lifetime.
+					logger.error("db-worker loop caught an unexpected throwable", t);
+					bus.post(new StoreProblem("write", StoreError.IO_FAILURE, t.getMessage()));
 				}
 			}
 		}
@@ -115,7 +136,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			try {
 				task.run();
 				return;
-			} catch (RuntimeException e) {
+			} catch (Throwable e) {
 				logger.warn("database write failed, attempt " + attempt + " of " + WRITE_ATTEMPTS
 						+ ": " + e.getMessage());
 				if (attempt == WRITE_ATTEMPTS) {
@@ -134,22 +155,89 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		}
 	}
 
-	/** Queues a unit of work that may throw SQLException. */
+	/**
+	 * Reports a write or read that never made it onto (or through) the queue at
+	 * all: the worker was not running, or the bounded queue was full. Unlike a
+	 * failure inside a queued task - which runWithRetry already logs and reports
+	 * - this loss would otherwise be completely silent.
+	 */
+	private void reportLostWork(String origin, String detail) {
+		String message = origin + " failed: " + detail;
+		logger.error("database " + message);
+		bus.post(new LogEvent("database " + message));
+		bus.post(new StoreProblem(origin, StoreError.IO_FAILURE, detail));
+	}
+
+	/** Queues a unit of work that may throw SQLException. Never runs it inline. */
 	private void enqueue(final SqlTask task) {
-		writeQueue.add(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					task.run(database.getConnection());
-				} catch (SQLException e) {
-					throw new RuntimeException(e);
+		if (!writeQueueWorker.isAlive()) {
+			reportLostWork("write", "db-worker is not running");
+			return;
+		}
+		try {
+			writeQueue.add(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						task.run(database.getConnection());
+					} catch (SQLException e) {
+						throw new RuntimeException(e);
+					}
 				}
-			}
-		});
+			});
+		} catch (IllegalStateException e) {
+			// LinkedBlockingQueue(4096).add() throws rather than blocking when full,
+			// and that exception would otherwise be swallowed by Guava's default
+			// SubscriberExceptionHandler when this runs on an AsyncEventBus thread.
+			reportLostWork("write", "write queue is full");
+		}
 	}
 
 	interface SqlTask {
 		void run(Connection c) throws SQLException;
+	}
+
+	/** A unit of work run on db-worker that produces a result for the caller. */
+	private interface ReadTask<T> {
+		T run(Connection c) throws Exception;
+	}
+
+	/**
+	 * Runs a read on db-worker and blocks the calling thread for its result, so
+	 * that every use of the Connection made by load() stays confined to
+	 * db-worker exactly like the writes are, instead of racing them.
+	 */
+	private <T> T runOnWorker(final ReadTask<T> task) throws Exception {
+		if (!writeQueueWorker.isAlive()) {
+			throw new IllegalStateException("db-worker is not running");
+		}
+		final CountDownLatch latch = new CountDownLatch(1);
+		final Object[] result = new Object[1];
+		final Exception[] failure = new Exception[1];
+		try {
+			writeQueue.add(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						result[0] = task.run(database.getConnection());
+					} catch (Exception e) {
+						failure[0] = e;
+					} finally {
+						latch.countDown();
+					}
+				}
+			});
+		} catch (IllegalStateException e) {
+			throw new IllegalStateException("write queue is full", e);
+		}
+		if (!latch.await(WORKER_AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+			throw new IllegalStateException(
+					"timed out waiting for db-worker after " + WORKER_AWAIT_TIMEOUT_MS + "ms");
+		}
+		if (failure[0] != null) throw failure[0];
+		@SuppressWarnings("unchecked")
+		T typed = (T) result[0];
+		return typed;
 	}
 
 	// ---- static SQL helpers, package-visible so they can be tested directly ----
@@ -251,15 +339,31 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			return;
 		}
 		writeQueueWorker.start();
-		bus.register(this);
+		// load() reads through db-worker itself (see runOnWorker), so it only needs
+		// the worker running, not the bus subscription. Registering after it keeps
+		// a PairStateUpdated/*SyncOutRequest arriving during startup from racing the
+		// initial load's own writes to the PortfolioList.
 		load();
+		bus.register(this);
+		busRegistered = true;
 	}
 
 	@Override
 	public void stop() {
-		bus.unregister(this);
+		if (busRegistered) {
+			bus.unregister(this);
+			busRegistered = false;
+		}
 		flush();
 		writeQueueWorker.interrupt();
+		try {
+			writeQueueWorker.join(WORKER_JOIN_TIMEOUT_MS);
+			if (writeQueueWorker.isAlive()) {
+				logger.error("db-worker did not stop within " + WORKER_JOIN_TIMEOUT_MS + "ms");
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 		if (database != null) database.close();
 	}
 
@@ -267,18 +371,23 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	public void load() {
 		if (database == null) return;
 		try {
-			List<String> documents = readDocuments(database.getConnection());
-			ArrayNode root = mapper.createArrayNode();
-			for (String doc : documents) {
-				JsonNode node = mapper.readTree(doc);
-				Map<String, StrategyState> states =
-						readStrategyStates(database.getConnection(), node.path("uid").asText());
-				root.add(PortfolioDocuments.splice(node, states, mapper));
-			}
+			ArrayNode root = runOnWorker(new ReadTask<ArrayNode>() {
+				@Override
+				public ArrayNode run(Connection c) throws Exception {
+					List<String> documents = readDocuments(c);
+					ArrayNode r = mapper.createArrayNode();
+					for (String doc : documents) {
+						JsonNode node = mapper.readTree(doc);
+						Map<String, StrategyState> states = readStrategyStates(c, node.path("uid").asText());
+						r.add(PortfolioDocuments.splice(node, states, mapper));
+					}
+					return r;
+				}
+			});
 			portfolioList.updateFromJson(root);
 			portfolioList.initialize();
 			status.setPtlConnected(true);
-			logger.info("loaded " + documents.size() + " portfolios from the database");
+			logger.info("loaded " + root.size() + " portfolios from the database");
 		} catch (Exception e) {
 			logger.error("unable to load portfolios", e);
 			bus.post(new LogEvent("unable to load portfolios: " + e.getMessage()));
@@ -352,6 +461,18 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 
 	@Override
 	public void bindPortfolioToAccount(Portfolio p, String accountCode) {
+		if (accountCode == null || accountCode.isEmpty()) {
+			// Portfolio.accountCode defaults to "", so an empty code would otherwise
+			// match every other unbound portfolio below (a false BIND_DENIED), and
+			// falling through with no other unbound portfolio would reach
+			// Portfolio.bind(""), which throws IllegalArgumentException uncaught on
+			// the caller's thread. A null code would NPE at the equals() call below.
+			logger.warn("bind rejected: account code must not be null or empty");
+			bus.post(new LogEvent("not allowed to bind portfolio: account code must not be empty"));
+			bus.post(new StoreProblem("bindPortfolioToAccount", StoreError.BIND_DENIED,
+					"account code must not be null or empty"));
+			return;
+		}
 		for (Portfolio other : portfolioList.getPortfolios()) {
 			if (other != p && accountCode.equals(other.getAccountCode())) {
 				logger.warn("bind rejected: account " + accountCode + " already bound to " + other.getUid());
@@ -367,16 +488,28 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 
 	@Override
 	public void flush() {
-		if (!writeQueueWorker.isAlive()) return;
+		if (!writeQueueWorker.isAlive()) {
+			reportLostWork("flush", "db-worker is not running; nothing to flush");
+			return;
+		}
 		final CountDownLatch latch = new CountDownLatch(1);
-		writeQueue.add(new Runnable() {
-			@Override
-			public void run() {
-				latch.countDown();
-			}
-		});
 		try {
-			latch.await();
+			writeQueue.add(new Runnable() {
+				@Override
+				public void run() {
+					latch.countDown();
+				}
+			});
+		} catch (IllegalStateException e) {
+			reportLostWork("flush", "write queue is full");
+			return;
+		}
+		try {
+			if (!latch.await(WORKER_AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+				logger.error("flush() timed out after " + WORKER_AWAIT_TIMEOUT_MS + "ms waiting for db-worker");
+				bus.post(new StoreProblem("flush", StoreError.IO_FAILURE,
+						"timed out waiting for db-worker"));
+			}
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
