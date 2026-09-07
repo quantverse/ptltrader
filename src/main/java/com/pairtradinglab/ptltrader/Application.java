@@ -730,11 +730,6 @@ public class Application {
 							}
 						}
 						
-						if (!((Portfolio) portfolio).checkFeatures()) {
-							MessageDialog.openError(shlPtlTrader, "Error", "This portfolio uses features not supported in this PTL Trader version.");
-							return;
-						}
-						
 						String confirmMsg;
 						if (((Portfolio) portfolio).getMasterStatus()==Portfolio.MASTER_STATUS_ACTIVE) {
 							confirmMsg=String.format("Are you sure to bind this portfolio to IB account #%s? Trading will start immediately.\n\nBy clicking \"OK\" you are agreeing to the following conditions: Trade placement and execution may be delayed or fail due to market volatility and volume, quote delays, incorrect historical data, system and software errors, Internet traffic, outages and other factors. You accept that solely you are taking those risks, and that Quantverse OÜ cannot be held responsible by you if they occur, regardless of the reason.", ((Account) account).getCode());

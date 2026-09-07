@@ -32,9 +32,7 @@ import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.ib.client.Contract;
 import com.pairtradinglab.ptltrader.LoggerFactory;
-import com.pairtradinglab.ptltrader.SupportedFeatures;
 import com.pairtradinglab.ptltrader.events.BeaconFlash;
-import com.pairtradinglab.ptltrader.events.LogEvent;
 import com.pairtradinglab.ptltrader.events.PortfolioSyncOutRequest;
 import com.pairtradinglab.ptltrader.trading.events.EquityChange;
 
@@ -59,7 +57,7 @@ public class Portfolio extends AbstractModelObject {
 	private final LoggerFactory loggerFactory;
 	
 	
-	@JsonIgnore
+	@JsonProperty("uid")
 	private final String uid;
 	@JsonIgnore
 	private final List<PairStrategy> pairStrategies = new CopyOnWriteArrayList<PairStrategy>();
@@ -93,25 +91,19 @@ public class Portfolio extends AbstractModelObject {
 	
 	@JsonIgnore
 	private volatile boolean dirty = false;
+	@JsonIgnore
 	private volatile boolean syncOutEnabled=true;
-	
-	
+
+
 	@JsonIgnore
 	private volatile int slotUsage=0; // in percents!
-	
+
 	@JsonIgnore
 	private final Logger logger;
-	
-	@JsonIgnore
-	private final List<String> features = new CopyOnWriteArrayList<String>();
-	
-	
+
+
 	public boolean isDirty() {
 		return dirty;
-	}
-	
-	public List<String> getFeatures() {
-		return features;
 	}
 
 	protected void setDirty(boolean dirty) {
@@ -197,6 +189,7 @@ public class Portfolio extends AbstractModelObject {
 		
 	}
 
+	@JsonIgnore
 	public List<PairStrategy> getPairStrategies() {
 		return pairStrategies;
 	}
@@ -209,30 +202,8 @@ public class Portfolio extends AbstractModelObject {
 		this.lastUpdate = lastUpdate;
 	}
 	
-	public boolean checkFeatures() {
-		for(String f : features) {
-			if (!SupportedFeatures.portfolioFeatures.contains(f)) {
-				return false;
-			}
-		}
-		return true;
-	}
-	
-	
 	public synchronized void initialize() {
 		// initialize all pair strategies
-		// we need to check features
-		boolean featuresOk = true;
-		for(String f : features) {
-			if (!SupportedFeatures.portfolioFeatures.contains(f)) {
-				featuresOk = false;
-				bus.post(new LogEvent(String.format("portfolio feature %s not supported", f)));
-			}
-		}
-		if (!featuresOk) {
-			bus.post(new LogEvent(String.format("portfolio \"%s\": aborting initialization", name)));
-			return;
-		}
 		if (!initialized) {
 			bus.register(this);
 		}
@@ -422,13 +393,7 @@ public class Portfolio extends AbstractModelObject {
 		}
 		setMasterStatus(r.get("master_status").asInt());
 		setPdtEnable(r.get("pdt_rules").asInt());
-		Iterator<JsonNode> ite = r.path("features").elements();
-		features.clear();
-		while (ite.hasNext()) {
-			String fea = ite.next().asText();
-			features.add(fea);
-		}
-		
+
 		// iterate through pair strategies
 		Iterator<JsonNode> strategyit = r.get("strategies").elements();
 		HashSet<String> strategyUids = new HashSet<String>(); 

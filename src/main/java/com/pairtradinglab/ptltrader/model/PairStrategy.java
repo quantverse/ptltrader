@@ -21,7 +21,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ib.client.*;
 
-import java.util.Iterator;
 import java.util.List;
 
 import org.joda.time.DateTime;
@@ -30,6 +29,7 @@ import org.joda.time.Duration;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -74,21 +74,21 @@ public class PairStrategy extends AbstractModelObject {
 	private final EventBus bus;
 	private final PairTradingCoreFactory coreFactory;
 	
-	@JsonIgnore
+	@JsonProperty("uid")
 	private final String uid;
 	@JsonIgnore
 	private final List<Position> positions = new CopyOnWriteArrayList<Position>();
-	@JsonIgnore
+	@JsonProperty("ticker1")
 	private volatile String stock1;
-	@JsonIgnore
+	@JsonProperty("ticker2")
 	private volatile String stock2;
 	@JsonIgnore
 	private volatile String stockDisp1;
 	@JsonIgnore
 	private volatile String stockDisp2;
-	@JsonIgnore
+	@JsonProperty("trade_as_1")
 	private volatile int tradeAs1;
-	@JsonIgnore
+	@JsonProperty("trade_as_2")
 	private volatile int tradeAs2;
 	@JsonIgnore
 	private volatile double zscoreBid=0;
@@ -126,33 +126,33 @@ public class PairStrategy extends AbstractModelObject {
 	private volatile double lastOpenEquity = 0;
 	
 	// model settings
-	@JsonIgnore
+	@JsonProperty("model")
 	private volatile String model=MODEL_RATIO;
-	@JsonIgnore
+	@JsonProperty("entry_threshold")
 	private volatile double entryThreshold=2;
-	@JsonIgnore
+	@JsonProperty("exit_threshold")
 	private volatile double exitThreshold=0;
-    @JsonIgnore
+    @JsonProperty("downtick_threshold")
     private volatile double downtickThreshold=0;
-	@JsonIgnore
+	@JsonProperty("max_score")
 	private volatile double maxEntryScore=6;
-	@JsonIgnore
+	@JsonProperty("ratio_ma_period")
 	private volatile int ratioMaPeriod=15;
 	@JsonIgnore
 	private volatile MAType ratioMaType=MAType.Sma;
-	@JsonIgnore
+	@JsonProperty("ratio_stddev_period")
 	private volatile int ratioStdDevPeriod=15;
-	@JsonIgnore
+	@JsonProperty("residual_linreg_period")
 	private volatile int residualLinRegPeriod=30;
-	@JsonIgnore
+	@JsonProperty("ratio_entry_mode")
 	private volatile int entryMode=PairTradingModel.ENTRY_MODE_SIMPLE;
-	@JsonIgnore
+	@JsonProperty("ratio_rsi_period")
 	private volatile int ratioRsiPeriod=10;
-	@JsonIgnore
+	@JsonProperty("ratio_rsi_threshold")
 	private volatile double ratioRsiThreshold=0;
-	@JsonIgnore
+	@JsonProperty("ka_ve")
 	private volatile double kalmanAutoVe = 0.001;
-	@JsonIgnore
+	@JsonProperty("ka_usage_target")
 	private volatile double kalmanAutoUsageTarget = 60;
 	
 	// extra rules
@@ -193,7 +193,7 @@ public class PairStrategy extends AbstractModelObject {
 	private volatile int exitEndHour = 15;
 	@JsonProperty("exit_end_minute")
 	private volatile int exitEndMinute = 58;
-	@JsonIgnore
+	@JsonProperty("timezone")
 	private volatile String timezoneId = "America/New_York";
 	@JsonIgnore
 	private volatile DateTimeZone timezone = DateTimeZone.forID("America/New_York");
@@ -207,7 +207,7 @@ public class PairStrategy extends AbstractModelObject {
 	private double slotOccupation = 1.0;
 
 	// neutrality
-	@JsonIgnore
+	@JsonProperty("neutrality")
 	private volatile int neutrality = NEUTRALITY_DOLLAR;
 	
 	// maintenance
@@ -233,17 +233,11 @@ public class PairStrategy extends AbstractModelObject {
 	
 	@JsonIgnore
 	private volatile boolean dirty = false;
-	private volatile boolean syncOutEnabled=true;
-	
 	@JsonIgnore
-	private final List<String> features = new CopyOnWriteArrayList<String>();
-	
+	private volatile boolean syncOutEnabled=true;
+
 	public boolean isDirty() {
 		return dirty;
-	}
-
-	public List<String> getFeatures() {
-		return features;
 	}
 
 	protected void setDirty(boolean dirty) {
@@ -590,6 +584,15 @@ public class PairStrategy extends AbstractModelObject {
 
 	public MAType getRatioMaType() {
 		return ratioMaType;
+	}
+
+	/**
+	 * updateFromJson reads this with MAType.values()[node.asInt()], so it must be
+	 * written as the ordinal and never as the enum name.
+	 */
+	@JsonGetter("ratio_ma_type")
+	public int getRatioMaTypeOrdinal() {
+		return ratioMaType.ordinal();
 	}
 
 	public void setRatioMaType(MAType ratioMaType) {
@@ -1143,14 +1146,7 @@ public class PairStrategy extends AbstractModelObject {
 		setTradingStatus(n.get("status").asInt());
 		setSlotOccupation(n.get("slot_occupation").asDouble());
 		setDirty(false);
-		
-		Iterator<JsonNode> ite = n.path("features").elements();
-		features.clear();
-		while (ite.hasNext()) {
-			String fea = ite.next().asText();
-			features.add(fea);
-		}
-		
+
 		syncOutEnabled=true;
 		 		
 	}

@@ -42,7 +42,6 @@ import com.ib.client.Execution;
 import com.ib.client.Order;
 import com.ib.client.TickType;
 import com.pairtradinglab.ptltrader.LoggerFactory;
-import com.pairtradinglab.ptltrader.SupportedFeatures;
 import com.pairtradinglab.ptltrader.events.AccountConnected;
 import com.pairtradinglab.ptltrader.events.BeaconFlash;
 import com.pairtradinglab.ptltrader.events.GlobalPortfolioUpdateRequest;
@@ -312,15 +311,7 @@ public class ConfinedEngine {
 		if (started) return;
 		debug("starting trading engine");
 		if (ptmodel instanceof PairTradingModelDummy) error(String.format("model %s is not supported in this version of PTL Trader, disabling strategy", strategy.getModel()));
-		
-		// check strategy features
-		for(String f : strategy.getFeatures()) {
-			if (!SupportedFeatures.strategyFeatures.contains(f)) {
-				error(String.format("feature %s is not supported, disabling strategy", f));
-				unsupportedStrategyFeatures = true;
-			}
-		}
-		
+
 		provider.start();
 		started=true;
 		
