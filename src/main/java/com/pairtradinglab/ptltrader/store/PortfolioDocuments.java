@@ -19,6 +19,8 @@
 package com.pairtradinglab.ptltrader.store;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -60,13 +62,30 @@ public class PortfolioDocuments {
 	}
 
 	/**
+	 * Convenience overload for callers that have no way to report a corrupt blob.
+	 * Production code should use the four-argument form: losing a model state is the
+	 * one persistence failure with a monetary cost and must never pass unnoticed.
+	 */
+	public static ObjectNode splice(JsonNode document, Map<String, StrategyState> states, ObjectMapper mapper) {
+		return splice(document, states, mapper, new ArrayList<String>());
+	}
+
+	/**
 	 * Returns a copy of the document with runtime state applied to each strategy.
 	 *
 	 * Every strategy node gets all three state fields, explicitly null where no
 	 * state row exists: PairStrategy.updateFromJson() reads them with n.get(...),
 	 * which returns null for an absent field and would throw.
+	 *
+	 * @param corruptStrategyUids collects the uid of every strategy whose stored
+	 *        last_model_state could not be parsed. Such a strategy still loads, but
+	 *        it resumes as if it had no stored state - which for a Kalman strategy
+	 *        holding an open position means it resumes wrong - so the caller is
+	 *        expected to log and surface every uid reported here. This class is a
+	 *        static utility with no logger of its own, hence the out-parameter.
 	 */
-	public static ObjectNode splice(JsonNode document, Map<String, StrategyState> states, ObjectMapper mapper) {
+	public static ObjectNode splice(JsonNode document, Map<String, StrategyState> states, ObjectMapper mapper,
+			Collection<String> corruptStrategyUids) {
 		ObjectNode copy = document.deepCopy();
 		JsonNode strategies = copy.get("strategies");
 		if (strategies == null || !strategies.isArray()) return copy;
@@ -94,8 +113,10 @@ public class PortfolioDocuments {
 					s.set("last_model_state", mapper.readTree(st.lastModelState));
 				} catch (IOException e) {
 					// A corrupt state blob must not prevent the portfolio loading.
-					// The strategy resumes as if it had no stored state.
+					// The strategy resumes as if it had no stored state - but it must
+					// not do so silently, so the caller is told which strategy it was.
 					s.putNull("last_model_state");
+					corruptStrategyUids.add(s.path("uid").asText());
 				}
 			}
 		}

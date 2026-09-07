@@ -21,7 +21,10 @@ package com.pairtradinglab.ptltrader.store;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Before;
@@ -149,9 +152,26 @@ public class PortfolioDocumentsTest {
 		Map<String, StrategyState> states = new HashMap<String, StrategyState>();
 		states.put("S1", new StrategyState("S1", null, null, "{ this is not json"));
 
-		JsonNode s = PortfolioDocuments.splice(doc, states, mapper).get("strategies").get(0);
+		List<String> corrupt = new ArrayList<String>();
+		JsonNode s = PortfolioDocuments.splice(doc, states, mapper, corrupt)
+				.get("strategies").get(0);
 		assertTrue("a corrupt blob must not prevent the portfolio loading",
 				s.get("last_model_state").isNull());
+		// ...but discarding it must not be silent: losing a model state is the one
+		// persistence failure with a monetary cost.
+		assertEquals("the affected strategy must be reported", Arrays.asList("S1"), corrupt);
+	}
+
+	@Test
+	public void testSpliceReportsNothingWhenEveryBlobParses() throws Exception {
+		ObjectNode doc = PortfolioDocuments.build(portfolio, mapper);
+		Map<String, StrategyState> states = new HashMap<String, StrategyState>();
+		states.put("S1", new StrategyState("S1", null, null,
+				"{\"@class\":\".PairTradingModelKalmanAutoState\",\"subModelId\":3}"));
+
+		List<String> corrupt = new ArrayList<String>();
+		PortfolioDocuments.splice(doc, states, mapper, corrupt);
+		assertTrue("a healthy blob must not be reported as corrupt", corrupt.isEmpty());
 	}
 
 	@Test

@@ -69,6 +69,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -78,6 +79,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.databinding.UpdateValueStrategy;
 import org.apache.log4j.Logger;
@@ -404,7 +406,7 @@ public class Application {
 		createContents();
 		if (!mStatus.isStoreReady()) {
 			MessageDialog.openError(shlPtlTrader, "Local Database Error",
-					"The local database could not be opened. Check the log for details.");
+					"The local database could not be opened or read. Check the log for details.");
 		}
 		aboutDialog = new AboutDialog(shlPtlTrader, SWT.PRIMARY_MODAL);
 		shlPtlTrader.open();
@@ -1294,7 +1296,7 @@ public class Application {
 							((PairStrategy) ps).prepareToDelete();
 							// delete pair
 							((PairStrategy) ps).getPortfolio().removePairStrategy((PairStrategy) ps);
-							// call webservice to delete pair (sync with server)
+							// drop its runtime state row and rewrite the portfolio document
 							portfolioStore.deleteStrategy((PairStrategy) ps);
 							tableViewerPortfPairs.refresh();
 						}
@@ -1905,6 +1907,13 @@ public class Application {
 		// by surprise.
 		s.setTradingStatus(PairStrategy.TRADING_STATUS_INACTIVE);
 		p.addPairStrategy(s);
+		// addPairStrategy() only adds to the list. initialize() is what registers the
+		// two Position objects on the bus and calls bind(), which creates and starts
+		// the trading core when the portfolio is bound to an account. Without it a
+		// pair added to a bound portfolio never trades and shows no z-score or engine
+		// status until the application is restarted. Safe on an unbound portfolio too:
+		// bind() is a no-op there and the later Portfolio.bind() starts the core.
+		s.initialize();
 		portfolioStore.savePortfolio(p);
 		bus.post(new LogEvent(String.format("added pair %s / %s", r.stock1, r.stock2)));
 	}
@@ -1948,14 +1957,53 @@ public class Application {
 		
 	}
 	
+	/**
+	 * The StoreProblem origins that a user action started, and which may therefore
+	 * report themselves in a modal dialog. Every other origin ("write", "flush",
+	 * "loadHistories") is produced by the store's background db-worker with nobody
+	 * necessarily at the keyboard, and goes to the log only.
+	 */
+	private static final Set<String> DIALOG_STORE_PROBLEM_ORIGINS = Collections.unmodifiableSet(
+			new HashSet<String>(Arrays.asList("bindPortfolioToAccount", "open", "load")));
+
+	/** Latch ensuring at most one store-problem dialog is open at a time. */
+	private final AtomicBoolean storeProblemDialogOpen = new AtomicBoolean(false);
+
 	@Subscribe
 	public void onStoreProblem(final StoreProblem p) {
+		// called from a bus thread!
+		//
+		// The bus is an AsyncEventBus over a fixed pool of five threads. A modal
+		// dialog opened from here holds the posting bus thread for as long as it is
+		// on screen, so a handful of background write failures with nobody at the
+		// keyboard would consume the whole pool and stop delivery of
+		// PairStateUpdated/TransactionEvent/Disconnected/BeaconFlash while positions
+		// are open. Hence: background origins never dialog (runWithRetry() and
+		// reportLostWork() already post a LogEvent for every one of them, so no
+		// visibility is lost), and the user-initiated ones use asyncExec plus a
+		// single-dialog latch so no bus thread is ever held by a dialog and dialogs
+		// cannot nest through MessageDialog's own readAndDispatch loop.
+		if (!DIALOG_STORE_PROBLEM_ORIGINS.contains(p.origin)) {
+			logger.error(String.format("store problem (%s): %s%s", p.origin, p.error,
+					p.detail == null ? "" : " - " + p.detail));
+			return;
+		}
+		if (!storeProblemDialogOpen.compareAndSet(false, true)) {
+			logger.error(String.format("store problem (%s): %s (dialog suppressed, one is already open)",
+					p.origin, p.error));
+			return;
+		}
 		final String title = "bindPortfolioToAccount".equals(p.origin)
 				? "Bind Operation Failed" : "Local Database Error";
-		Display.getDefault().syncExec(new Runnable() {
+		Display.getDefault().asyncExec(new Runnable() {
 			@Override
 			public void run() {
-				MessageDialog.openError(shlPtlTrader, title, p.error.toString());
+				try {
+					if (shlPtlTrader == null || shlPtlTrader.isDisposed()) return;
+					MessageDialog.openError(shlPtlTrader, title, p.error.toString());
+				} finally {
+					storeProblemDialogOpen.set(false);
+				}
 			}
 		});
 	}

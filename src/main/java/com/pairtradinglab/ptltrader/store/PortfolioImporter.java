@@ -19,12 +19,17 @@
 package com.pairtradinglab.ptltrader.store;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.pairtradinglab.ptltrader.model.PairStrategy;
 import com.pairtradinglab.ptltrader.trading.ContractExt;
 
 /**
@@ -63,6 +68,17 @@ public class PortfolioImporter {
 		"exit_start_hour", "exit_start_minute", "exit_end_hour", "exit_end_minute",
 		"timezone", "allow_positions", "status", "slot_occupation"
 	};
+
+	/**
+	 * The model names PairTradingCore recognises. An unrecognised one is not fatal at
+	 * runtime - core start falls through to PairTradingModelDummy with a log line -
+	 * but a pair that silently never trades is worse than a rejected import file, so
+	 * it is caught here instead.
+	 */
+	public static final Set<String> VALID_MODELS = Collections.unmodifiableSet(
+		new HashSet<String>(Arrays.asList(
+			PairStrategy.MODEL_RATIO, PairStrategy.MODEL_RESIDUAL,
+			PairStrategy.MODEL_KALMAN_GRID, PairStrategy.MODEL_KALMAN_AUTO)));
 
 	private PortfolioImporter() {
 	}
@@ -136,6 +152,11 @@ public class PortfolioImporter {
 					throw new InvalidImportException(String.format(
 							"Strategy %s is missing the required field \"%s\".", label, f));
 				}
+			}
+			String model = s.get("model").asText();
+			if (!VALID_MODELS.contains(model)) {
+				throw new InvalidImportException(String.format(
+						"Strategy %s has an unrecognized model \"%s\".", label, model));
 			}
 			validateSymbol(s.get("ticker1").asText());
 			validateSymbol(s.get("ticker2").asText());

@@ -25,10 +25,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -99,6 +102,15 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 
 	private final ObjectMapper mapper = new ObjectMapper();
 	private final BlockingQueue<Runnable> writeQueue = new LinkedBlockingQueue<Runnable>(4096);
+
+	/**
+	 * Uids of portfolios deleted in this session. Read on db-worker to drop a
+	 * strategy_state write that a still-stopping core emitted after its portfolio was
+	 * deleted. Uids are never reused - import and New Portfolio both generate fresh
+	 * ones - so an entry here can never wrongly suppress a later live portfolio.
+	 */
+	private final Set<String> deletedPortfolioUids =
+			Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
 
 	private volatile Database database;
 	private volatile boolean busRegistered = false;
@@ -218,15 +230,18 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		}
 		final CountDownLatch latch = new CountDownLatch(1);
 		final Object[] result = new Object[1];
-		final Exception[] failure = new Exception[1];
+		// Throwable, not Exception: the finally below always counts the latch down, so
+		// an Error escaping the read task would otherwise be reported to the caller as
+		// a successful read that produced null.
+		final Throwable[] failure = new Throwable[1];
 		try {
 			writeQueue.add(new Runnable() {
 				@Override
 				public void run() {
 					try {
 						result[0] = task.run(database.getConnection());
-					} catch (Exception e) {
-						failure[0] = e;
+					} catch (Throwable t) {
+						failure[0] = t;
 					} finally {
 						latch.countDown();
 					}
@@ -239,7 +254,11 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			throw new IllegalStateException(
 					"timed out waiting for db-worker after " + WORKER_AWAIT_TIMEOUT_MS + "ms");
 		}
-		if (failure[0] != null) throw failure[0];
+		if (failure[0] != null) {
+			if (failure[0] instanceof Exception) throw (Exception) failure[0];
+			if (failure[0] instanceof Error) throw (Error) failure[0];
+			throw new IllegalStateException("db-worker read task failed", failure[0]);
+		}
 		@SuppressWarnings("unchecked")
 		T typed = (T) result[0];
 		return typed;
@@ -462,6 +481,9 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	@Override
 	public void load() {
 		if (database == null) return;
+		// Written on db-worker, read here after the latch in runOnWorker(), which
+		// establishes the happens-before edge.
+		final List<String> corruptModelStates = new ArrayList<String>();
 		try {
 			ArrayNode root = runOnWorker(new ReadTask<ArrayNode>() {
 				@Override
@@ -471,11 +493,12 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 					for (String doc : documents) {
 						JsonNode node = mapper.readTree(doc);
 						Map<String, StrategyState> states = readStrategyStates(c, node.path("uid").asText());
-						r.add(PortfolioDocuments.splice(node, states, mapper));
+						r.add(PortfolioDocuments.splice(node, states, mapper, corruptModelStates));
 					}
 					return r;
 				}
 			});
+			reportCorruptModelStates(corruptModelStates);
 			portfolioList.updateFromJson(root);
 			portfolioList.initialize();
 			status.setStoreReady(true);
@@ -485,6 +508,25 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			bus.post(new LogEvent("unable to load portfolios: " + e.getMessage()));
 			bus.post(new StoreProblem("load", StoreError.IO_FAILURE, e.getMessage()));
 		}
+	}
+
+	/**
+	 * Surfaces every strategy whose stored model state could not be parsed. Such a
+	 * strategy loads with a null model state, and a Kalman strategy that resumes an
+	 * open position without its state resumes wrong - the one persistence failure
+	 * with a monetary cost - so this must never be silent.
+	 */
+	private void reportCorruptModelStates(List<String> uids) {
+		if (uids.isEmpty()) return;
+		StringBuilder sb = new StringBuilder(
+				"unreadable stored model state, strategy resumes without it: ");
+		for (int i = 0; i < uids.size(); i++) {
+			if (i > 0) sb.append(", ");
+			sb.append(uids.get(i));
+		}
+		String message = sb.toString();
+		logger.error(message);
+		bus.post(new LogEvent(message));
 	}
 
 	/**
@@ -552,6 +594,17 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		enqueue(new SqlTask() {
 			@Override
 			public void run(Connection c) throws SQLException {
+				// stopStrategyCores() is asynchronous, so a core can emit one last
+				// PairStateUpdated after its portfolio was deleted. Writing it would
+				// violate strategy_state's foreign key on portfolios(uid) and cost
+				// three retries and an ERROR for a row nobody wants. The check is made
+				// here, on db-worker, rather than at enqueue time: deletePortfolio()
+				// records the uid before it queues the delete, so any task that runs
+				// after that delete necessarily sees the uid recorded.
+				if (deletedPortfolioUids.contains(portfolioUid)) {
+					logger.debug("dropping late strategy state for deleted portfolio " + portfolioUid);
+					return;
+				}
 				upsertStrategyState(c, portfolioUid, st);
 			}
 		});
@@ -575,9 +628,20 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	@Override
 	public void deletePortfolio(Portfolio p) {
 		final String uid = p.getUid();
+		// Detach the portfolio and its strategies from the bus before anything else.
+		// Portfolio.initialize() registered it and nothing else ever unregisters it,
+		// so a deleted portfolio would keep receiving BeaconFlash and, on its next
+		// dirty flag, post a PortfolioSyncOutRequest that re-inserts the row being
+		// deleted here - the portfolio would reappear on the next restart with all
+		// its pairs. Done here rather than in the menu action so every caller of
+		// deletePortfolio() gets it.
+		p.prepareToDelete();
+		// Recorded before the delete is queued; see saveStrategyState().
+		deletedPortfolioUids.add(uid);
 		enqueue(new SqlTask() {
 			@Override
 			public void run(Connection c) throws SQLException {
+				// strategy_state rows go with it: the foreign key is ON DELETE CASCADE.
 				deletePortfolioRow(c, uid);
 			}
 		});

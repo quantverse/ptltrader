@@ -102,6 +102,30 @@ public class PortfolioImporterTest {
 	}
 
 	@Test
+	public void testRejectsAnUnrecognizedModel() throws Exception {
+		String broken = PORTFOLIO.replace("\"model\":\"Ratio\"", "\"model\":\"Ratio-v9\"");
+		try {
+			PortfolioImporter.parse(broken, mapper);
+			fail("expected InvalidImportException");
+		} catch (PortfolioImporter.InvalidImportException e) {
+			// An unknown model is not fatal at runtime - the core falls through to
+			// PairTradingModelDummy - so a pair with one would silently never trade.
+			// The message must name the offending strategy and the bad value.
+			assertTrue(e.getMessage(), e.getMessage().contains("NYSE:V/NYSE:MA"));
+			assertTrue(e.getMessage(), e.getMessage().contains("Ratio-v9"));
+		}
+	}
+
+	@Test
+	public void testAcceptsEveryKnownModel() throws Exception {
+		for (String model : PortfolioImporter.VALID_MODELS) {
+			String json = PORTFOLIO.replace("\"model\":\"Ratio\"", "\"model\":\"" + model + "\"");
+			assertEquals(model, PortfolioImporter.parse(json, mapper).get(0)
+					.get("strategies").get(0).get("model").asText());
+		}
+	}
+
+	@Test
 	public void testRejectsMissingStrategyField() throws Exception {
 		String broken = PORTFOLIO.replace("\"entry_threshold\":2.0,", "");
 		try {

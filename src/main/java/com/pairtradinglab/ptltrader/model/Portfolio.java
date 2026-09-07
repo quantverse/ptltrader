@@ -212,7 +212,28 @@ public class Portfolio extends AbstractModelObject {
 		}
 		initialized=true;
 	}
-	
+
+	/**
+	 * Detaches this portfolio and all of its strategies from the event bus, undoing
+	 * what initialize() did. Must be called before a portfolio is removed from the
+	 * PortfolioList: otherwise the removed object keeps receiving BeaconFlash and its
+	 * onBeaconFlash() posts a PortfolioSyncOutRequest on the next dirty flag, which
+	 * re-inserts the very row that was just deleted, and its strategies' Position
+	 * objects stay registered on the bus for the rest of the session.
+	 */
+	public synchronized void prepareToDelete() {
+		// Guarded by the same flag initialize() sets, so this exactly undoes what that
+		// did and is idempotent. It also keeps PairStrategy.prepareToDelete() - whose
+		// bus.unregister() of the Position objects would throw if they were never
+		// registered - off a portfolio that was never initialized in the first place.
+		if (!initialized) return;
+		for (PairStrategy p: pairStrategies) {
+			p.prepareToDelete();
+		}
+		bus.unregister(this);
+		initialized=false;
+	}
+
 	public void bind(String accountCode) {
 		if (accountCode.isEmpty()) throw new IllegalArgumentException("Cannot bind to empty account code");
 		setEquity(0);
