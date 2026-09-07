@@ -45,8 +45,15 @@ public class LoggerFactoryImpl implements LoggerFactory {
 		if (!configured) {
 			synchronized(LoggerFactoryImpl.class) {
 				if (!configured) {
-					String home = System.getProperty("user.home")+ File.separator + "Application Data";
-					String logfile = home + File.separator + "PTLTrader" + File.separator + runtimeParams.getProfile() + ".log";
+					File logTarget = DataDirectory.logFile(runtimeParams.getProfile());
+					try {
+						DataDirectory.ensureExists(logTarget.getParentFile());
+					} catch (IOException e) {
+						// Nothing is logged yet, so report on stderr and continue with
+						// the console appender only.
+						System.err.println("unable to create log directory: " + e.getMessage());
+					}
+					String logfile = logTarget.getAbsolutePath();
 					Logger root = Logger.getRootLogger();
 					PatternLayout layout = new PatternLayout("%d{ISO8601} [%t] %p %c %x - %m%n");
 					ConsoleAppender ca = new ConsoleAppender(layout);
