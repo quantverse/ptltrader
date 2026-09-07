@@ -469,7 +469,10 @@ public class Application {
 			public void shellActivated(ShellEvent e) {
 				if (firstTimeActivated) {
 					firstTimeActivated=false;
-
+					if (runtimeParams.isAutoStart() && !autoStarted) {
+						autoStarted=true;
+						connectToIb();
+					}
 				}
 			}
 		});
@@ -671,7 +674,6 @@ public class Application {
 							bus.post(new LogEvent(logentry));
 							((Portfolio) portfolio).unbind();
 							portfolioStore.savePortfolio((Portfolio) portfolio);
-
 						}
 					} else {
 						MessageDialog.openError(shlPtlTrader, "Error", "This portfolio is not bound to any account.");
