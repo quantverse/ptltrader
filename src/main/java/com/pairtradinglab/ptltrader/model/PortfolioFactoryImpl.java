@@ -22,7 +22,6 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.eventbus.EventBus;
-import com.pairtradinglab.ptltrader.PtlApiClient;
 import com.pairtradinglab.ptltrader.LoggerFactory;
 
 public class PortfolioFactoryImpl implements PortfolioFactory {

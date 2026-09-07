@@ -77,7 +77,6 @@ import java.util.concurrent.Executors;
 import org.eclipse.core.databinding.UpdateValueStrategy;
 import org.apache.log4j.Logger;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.eventbus.AsyncEventBus;
 import com.google.common.eventbus.EventBus;
 
@@ -100,7 +99,9 @@ import com.pairtradinglab.ptltrader.events.AmqpConnect;
 import com.pairtradinglab.ptltrader.events.AmqpProblem;
 import com.pairtradinglab.ptltrader.events.IbConnectionFailed;
 import com.pairtradinglab.ptltrader.events.LogEvent;
-import com.pairtradinglab.ptltrader.events.PtlApiProblem;
+import com.pairtradinglab.ptltrader.store.PortfolioStore;
+import com.pairtradinglab.ptltrader.store.SqlitePortfolioStore;
+import com.pairtradinglab.ptltrader.events.StoreProblem;
 import com.pairtradinglab.ptltrader.ib.SimpleWrapper;
 import com.pairtradinglab.ptltrader.model.*;
 import com.pairtradinglab.ptltrader.model.converter.Boolean2Led;
@@ -140,7 +141,7 @@ public class Application {
 	
 	// dependencies to inject
 	private final PortfolioList mPortfolioList;
-	private final PtlApiClient apiClient;
+	private final PortfolioStore portfolioStore;
 	private final Status mStatus;
 	private final LogEntryList mLogEntryList;
 	private final TradeHistory mTradeHistory;
@@ -158,7 +159,7 @@ public class Application {
 	private final Set<String> connectedAccounts;
 	
 	
-	public Application(PortfolioList mPortfolioList, PtlApiClient apiClient,
+	public Application(PortfolioList mPortfolioList, PortfolioStore portfolioStore,
 			Status mStatus, LogEntryList mLogEntryList,
 			TradeHistory mTradeHistory, Settings mSettings,
 			AccountList mAccountList, Beacon beacon, Logger logger,
@@ -166,7 +167,7 @@ public class Application {
 			RuntimeParams runtimeParams, SystemMonitor systemMonitor, Set<String> connectedAccounts) {
 		super();
 		this.mPortfolioList = mPortfolioList;
-		this.apiClient = apiClient;
+		this.portfolioStore = portfolioStore;
 		this.mStatus = mStatus;
 		this.mLogEntryList = mLogEntryList;
 		this.mTradeHistory = mTradeHistory;
@@ -346,7 +347,7 @@ public class Application {
 					pico.addComponent(StringXorProcessor.class);
 					pico.addComponent(ActiveCores.class);
 					pico.addComponent(ActivityDetector.class);
-					pico.as(Characteristics.USE_NAMES).addComponent(PtlApiClient.class);
+					pico.as(Characteristics.USE_NAMES).addComponent(PortfolioStore.class, SqlitePortfolioStore.class);
 					pico.addComponent(PortfolioList.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(PortfolioFactoryImpl.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(PairStrategyFactoryImpl.class);
@@ -410,6 +411,10 @@ public class Application {
     		    
 		setDefaultValues();
 		createContents();
+		if (!mStatus.isPtlConnected()) {
+			MessageDialog.openError(shlPtlTrader, "Local Database Error",
+					"The local database could not be opened. Check the log for details.");
+		}
 		aboutDialog = new AboutDialog(shlPtlTrader, SWT.PRIMARY_MODAL);
 		shlPtlTrader.open();
 		shlPtlTrader.layout();
@@ -418,8 +423,6 @@ public class Application {
 				display.sleep();
 			}
 		}
-		apiClient.closeAll();
-		PtlApiClient.getExecutor().shutdownNow();
 		if (getWrapper().getIbSocket().isConnected()) {
 			logger.debug("disconnecting IB");
 			getWrapper().getIbSocket().eDisconnect();
@@ -466,10 +469,7 @@ public class Application {
 			public void shellActivated(ShellEvent e) {
 				if (firstTimeActivated) {
 					firstTimeActivated=false;
-					if (runtimeParams.isAutoStart()) {
-						connectToPtl();
-					}
-					
+
 				}
 			}
 		});
@@ -670,14 +670,8 @@ public class Application {
 							logger.info(logentry);
 							bus.post(new LogEvent(logentry));
 							((Portfolio) portfolio).unbind();
-							try {
-								apiClient.updatePortfolio((Portfolio) portfolio);
-							} catch (JsonProcessingException e1) {
-								logger.error("unable to sync change with PTL site, JSON processing error");
-								
-							}
-							
-							
+							portfolioStore.savePortfolio((Portfolio) portfolio);
+
 						}
 					} else {
 						MessageDialog.openError(shlPtlTrader, "Error", "This portfolio is not bound to any account.");
@@ -746,7 +740,7 @@ public class Application {
 							String logentry = String.format("binding portfolio [%s] to account %s", ((Portfolio) portfolio).getName(), ((Account) account).getCode());
 							logger.info(logentry);
 							bus.post(new LogEvent(logentry));
-							apiClient.bindPortfolioToAccount((Portfolio) portfolio, ((Account) account).getCode());
+							portfolioStore.bindPortfolioToAccount((Portfolio) portfolio, ((Account) account).getCode());
 							
 						}
 					} else {
@@ -1312,7 +1306,7 @@ public class Application {
 							// delete pair
 							((PairStrategy) ps).getPortfolio().removePairStrategy((PairStrategy) ps);
 							// call webservice to delete pair (sync with server)
-							apiClient.deletePairStrategy((PairStrategy) ps);
+							portfolioStore.deleteStrategy((PairStrategy) ps);
 							tableViewerPortfPairs.refresh();
 						}
 						
@@ -1607,8 +1601,7 @@ public class Application {
 		btnPTLConnect.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
-				connectToPtl();
-				
+
 			}
 		});
 		btnPTLConnect.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 1, 1));
@@ -1757,7 +1750,7 @@ public class Application {
 		mntmReloadPortfolios.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
-				apiClient.loadPortfolios(true);
+				portfolioStore.load();
 			}
 		});
 		mntmReloadPortfolios.setText("Update Portfolios From PTL");
@@ -1862,40 +1855,16 @@ public class Application {
 		
 	}
 	
-	private void connectToPtl() {
-		mSettings.setPtlConnectEnabled(false);
-		apiClient.loadPortfolios(false);
-		apiClient.loadTransactionHistories();
-		apiClient.loadPairTradeHistories();
-	}
-	
-	
 	@Subscribe
-	public void onPtlApiProblem(final PtlApiProblem p) {
-		if ("loadPortfolios".equals(p.origin)) {
-			mSettings.setPtlConnectEnabled(true);
-			Display.getDefault().syncExec(new Runnable()
-	        {
-	            @Override
-	            public void run()
-	            {
-	            	MessageDialog.openError(shlPtlTrader, "Pair Trading Lab Connection Error", p.error.toString());
-	            }
-	       });
-			
-		}
-		
-		if ("bindPortfolioToAccount".equals(p.origin)) {
-			Display.getDefault().syncExec(new Runnable()
-	        {
-	            @Override
-	            public void run()
-	            {
-	            	MessageDialog.openError(shlPtlTrader, "Bind Operation Failed", p.error.toString());
-	            }
-	       });
-			
-		}
+	public void onStoreProblem(final StoreProblem p) {
+		final String title = "bindPortfolioToAccount".equals(p.origin)
+				? "Bind Operation Failed" : "Local Database Error";
+		Display.getDefault().syncExec(new Runnable() {
+			@Override
+			public void run() {
+				MessageDialog.openError(shlPtlTrader, title, p.error.toString());
+			}
+		});
 	}
 	
 	@Subscribe

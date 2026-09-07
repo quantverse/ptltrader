@@ -34,7 +34,6 @@ import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.pairtradinglab.ptltrader.events.AmqpConnect;
 import com.pairtradinglab.ptltrader.events.AmqpProblem;
-import com.pairtradinglab.ptltrader.events.PtlApiConnect;
 import com.pairtradinglab.ptltrader.events.SerializedEvent;
 import com.pairtradinglab.ptltrader.model.Settings;
 import com.pairtradinglab.ptltrader.model.Status;
@@ -312,14 +311,6 @@ public class AmqpEngine implements Startable {
             conn = null;
 		}
 	}
-	
-	@Subscribe
-	// called from master event bus only
-	public void onPtlApiConnect(PtlApiConnect event) {
-		messages.put(new AmqpControlMessage(AmqpControlMessage.TYPE_CONNECT, null, DateTime.now()));
-		
-	}
-	
 	
 	/**
 	 * Confined to amqp thread
