@@ -22,9 +22,8 @@ import org.joda.time.DateTime;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.pairtradinglab.ptltrader.CustomDatetimeUtcSerializer;
-import com.pairtradinglab.ptltrader.events.ConfidentialEvent;
 
-public class EquityChange implements ConfidentialEvent {
+public class EquityChange {
 	@JsonSerialize(using = CustomDatetimeUtcSerializer.class)
 	public final DateTime datetime;
 	public final String accountCode;

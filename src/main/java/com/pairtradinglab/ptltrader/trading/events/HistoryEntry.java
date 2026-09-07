@@ -22,10 +22,8 @@ import org.joda.time.*;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.pairtradinglab.ptltrader.CustomDatetimeUtcSerializer;
-import com.pairtradinglab.ptltrader.events.ConfidentialEvent;
-import com.pairtradinglab.ptltrader.events.ImportantEvent;
 
-public class HistoryEntry implements ImportantEvent, ConfidentialEvent {
+public class HistoryEntry {
 	public static final String ACTION_OPENED_LONG = "opened long";
 	public static final String ACTION_OPENED_SHORT = "opened short";
 	public static final String ACTION_CLOSED = "closed";

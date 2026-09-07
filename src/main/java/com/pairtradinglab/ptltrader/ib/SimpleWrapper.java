@@ -57,8 +57,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.prefs.Preferences;
 import java.util.UUID;
 
-import com.ning.http.client.Response;
-import com.ning.http.client.AsyncHttpClient.BoundRequestBuilder;
 import com.pairtradinglab.ptltrader.Application;
 import com.pairtradinglab.ptltrader.LoggerFactory;
 import com.pairtradinglab.ptltrader.RuntimeParams;

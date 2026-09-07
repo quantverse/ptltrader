@@ -25,8 +25,8 @@ public class Status extends AbstractModelObject {
 	private volatile boolean ibConnected=false;
 	private volatile boolean ibConnecting = false;
 	private volatile boolean ibConnectingOrConnected = false;
-	private volatile boolean ptlConnected=false;
-	
+	private volatile boolean storeReady=false;
+
 	public boolean isIbConnected() {
 		return ibConnected;
 	}
@@ -38,14 +38,14 @@ public class Status extends AbstractModelObject {
 		setIbConnectingOrConnected(ibConnecting || ibConnected);
 	}
 
-	public boolean isPtlConnected() {
-		return ptlConnected;
+	public boolean isStoreReady() {
+		return storeReady;
 	}
 
-	public void setPtlConnected(boolean ptlConnected) {
-		boolean oldval=this.ptlConnected;
-		this.ptlConnected = ptlConnected;
-		firePropertyChange("ptlConnected", oldval, this.ptlConnected);
+	public void setStoreReady(boolean storeReady) {
+		boolean oldval=this.storeReady;
+		this.storeReady = storeReady;
+		firePropertyChange("storeReady", oldval, this.storeReady);
 	}
 
 	public boolean isIbConnecting() {

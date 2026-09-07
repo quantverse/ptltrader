@@ -27,7 +27,6 @@ import java.util.TreeMap;
 import com.google.common.eventbus.EventBus;
 import com.ib.client.*;
 import com.pairtradinglab.ptltrader.RuntimeParams;
-import com.pairtradinglab.ptltrader.StringXorProcessor;
 import com.pairtradinglab.ptltrader.ib.HistoricalDataRequest;
 import com.pairtradinglab.ptltrader.ib.SimpleWrapper;
 import com.pairtradinglab.ptltrader.model.Settings;
@@ -62,7 +61,6 @@ public class HistoricalDataProviderTest {
 		
 		pico = new DefaultPicoContainer();
 		pico.addComponent(HistoricalDataProviderFactoryImpl.class);
-		pico.addComponent(StringXorProcessor.class);
 		pico.addComponent(runtimeMock);
 		//LoggerFactory lf = new LoggerFactoryImpl();
 		//Logger l = lf.createLogger(HistoricalDataProviderTest.class.getSimpleName());

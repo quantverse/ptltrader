@@ -199,8 +199,7 @@ public class ConfinedEngine {
 	private DateTime lastResumed = null;
 	
 	private boolean lastHistDataRequestFailed = false;
-	private boolean unsupportedStrategyFeatures = false;
-	
+
 	private final String exchange1;
 	private final String exchange2;
 	
@@ -1786,13 +1785,6 @@ public class ConfinedEngine {
 			reportStatus(CoreStatus.UNSUPPORTED_MODEL);
 			return;
 		}
-		
-		if (unsupportedStrategyFeatures) {
-			reportStatus(CoreStatus.UNSUPPORTED_FEATURES);
-			return;
-			
-		}
-		
 		
 		EClientSocket es = getSocket();
 		

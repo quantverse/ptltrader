@@ -52,7 +52,6 @@ import com.pairtradinglab.ptltrader.ActiveCores;
 import com.pairtradinglab.ptltrader.LoggerFactory;
 import com.pairtradinglab.ptltrader.LoggerFactoryImpl;
 import com.pairtradinglab.ptltrader.RuntimeParams;
-import com.pairtradinglab.ptltrader.StringXorProcessor;
 import com.pairtradinglab.ptltrader.events.AccountConnected;
 import com.pairtradinglab.ptltrader.events.BeaconFlash;
 import com.pairtradinglab.ptltrader.ib.SimpleWrapper;
@@ -147,7 +146,7 @@ public class ConfinedEngineTest {
 		});
 
 		
-		ce = new ConfinedEngine(ptm, ps, wrapperMap, lf, mdp, bus, new PairDataProviderFactoryImpl(bus, new HistoricalDataProviderFactoryImpl(mock(List.class), new Settings(runtimeMock, new StringXorProcessor()), l)), connectedAccounts, mock(ActiveCores.class), detectorMock);
+		ce = new ConfinedEngine(ptm, ps, wrapperMap, lf, mdp, bus, new PairDataProviderFactoryImpl(bus, new HistoricalDataProviderFactoryImpl(mock(List.class), new Settings(runtimeMock), l)), connectedAccounts, mock(ActiveCores.class), detectorMock);
 		ce.setLastDataObtained(DateTime.now());
 		
 	}

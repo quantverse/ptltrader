@@ -478,7 +478,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			});
 			portfolioList.updateFromJson(root);
 			portfolioList.initialize();
-			status.setPtlConnected(true);
+			status.setStoreReady(true);
 			logger.info("loaded " + root.size() + " portfolios from the database");
 		} catch (Exception e) {
 			logger.error("unable to load portfolios", e);

@@ -25,10 +25,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.pairtradinglab.ptltrader.CustomDatetimeUtcSerializer;
 import com.pairtradinglab.ptltrader.CustomDurationSerializer;
-import com.pairtradinglab.ptltrader.events.ConfidentialEvent;
-import com.pairtradinglab.ptltrader.events.ImportantEvent;
 
-public class TransactionEvent implements ImportantEvent, ConfidentialEvent {
+public class TransactionEvent {
 	public static final int DIRECTION_LONG = 1;
 	public static final int DIRECTION_SHORT = -1;
 	

@@ -105,8 +105,6 @@ import org.eclipse.swt.widgets.FileDialog;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.pairtradinglab.ptltrader.events.AmqpConnect;
-import com.pairtradinglab.ptltrader.events.AmqpProblem;
 import com.pairtradinglab.ptltrader.events.IbConnectionFailed;
 import com.pairtradinglab.ptltrader.events.LogEvent;
 import com.pairtradinglab.ptltrader.store.PortfolioDocuments;
@@ -163,11 +161,8 @@ public class Application {
 	private final Logger logger;
 	private final EventBus bus;
 	private final List<SimpleWrapper> ibWrappers;
-	private final AmqpEngine amqpEngine;
-	private final AmqpProxy amqpProxy;
 	private final LegHistory mLegHistory;
 	private final RuntimeParams runtimeParams;
-	private final SystemMonitor systemMonitor;
 	private final Set<String> connectedAccounts;
 	private final PairStrategyFactory pairStrategyFactory;
 
@@ -176,8 +171,8 @@ public class Application {
 			Status mStatus, LogEntryList mLogEntryList,
 			TradeHistory mTradeHistory, Settings mSettings,
 			AccountList mAccountList, Beacon beacon, Logger logger,
-			EventBus bus, List<SimpleWrapper> ibWrappers, AmqpEngine amqpEngine, AmqpProxy amqpProxy, LegHistory mLegHistory,
-			RuntimeParams runtimeParams, SystemMonitor systemMonitor, Set<String> connectedAccounts,
+			EventBus bus, List<SimpleWrapper> ibWrappers, LegHistory mLegHistory,
+			RuntimeParams runtimeParams, Set<String> connectedAccounts,
 			PairStrategyFactory pairStrategyFactory) {
 		super();
 		this.mPortfolioList = mPortfolioList;
@@ -191,11 +186,8 @@ public class Application {
 		this.logger = logger;
 		this.bus = bus;
 		this.ibWrappers = ibWrappers;
-		this.amqpEngine = amqpEngine;
-		this.amqpProxy = amqpProxy;
 		this.mLegHistory = mLegHistory;
 		this.runtimeParams = runtimeParams;
-		this.systemMonitor = systemMonitor;
 		this.connectedAccounts = connectedAccounts;
 		this.pairStrategyFactory = pairStrategyFactory;
 
@@ -211,17 +203,14 @@ public class Application {
 	private DataBindingContext m_bindingContext;
 
 	protected Shell shlPtlTrader;
-	private Text textPTLAccessKey;
-	private Text textPTLAccessToken;
 	private Text textIbClientId;
 	private Text textIbHost;
 	private Text textIbPort;
 	private Text textIbFaAccount;
-	private Text textPtlStatus;
-	
-	
-	
-	
+
+
+
+
 	private Table tablePortfolios;
 	private TableViewer tableViewerPortfolios;
 	private Table tablePortfPairs;
@@ -235,7 +224,6 @@ public class Application {
 	private Text textIbStatus;
 	private Button btnIbConnect;
 	private Label lblIbStatusLed;
-	private Label lblPTLStatusLed;
 	private Text textPairBasicStock1;
 	private Text textPairBasicStock2;
 
@@ -297,18 +285,14 @@ public class Application {
 	private Button btnPairResetLastOpened;
 	private Button btnPairOpenLong;
 	private Button btnPairOpenShort;
-	private Button btnPTLConnect;
-	
-	
+
+
 	private static final ExecutorService busExecutor = Executors.newFixedThreadPool(5, new ThreadFactoryBuilder().setNameFormat("bus-master-%d").build());
-	private static final ExecutorService amqpBusExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setNameFormat("amqp-bus").build());
 	private Table tableLegHistory;
 	private TableViewer tableViewerLegHistory;
 	private Table tableAccounts;
 	private TableViewer tableViewerAccounts;
-	private Button btnPTLSaveToken;
-	private Button btnConfidentialMode;
-	
+
 	private boolean firstTimeActivated=true;
 	private boolean autoStarted=false;
 	private ProgressBar progressBarPairSlotUsage;
@@ -344,13 +328,11 @@ public class Application {
 					pico.as(Characteristics.USE_NAMES).addComponent(Application.class);
 					pico.addComponent(runtimeParams);
 					pico.addComponent("bus", new AsyncEventBus("bus_master", busExecutor));
-					//pico.addComponent("amqpBus", new AsyncEventBus("amqp_bus", amqpBusExecutor));
 					pico.addComponent(LoggerFactoryImpl.class);
-					
+
 					LoggerFactory lf = (LoggerFactory) pico.getComponent(LoggerFactory.class);
 					Logger l = lf.createLogger("PTLTrader");
 					pico.addComponent(l);
-					pico.as(Characteristics.USE_NAMES).addComponent(SystemMonitor.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(Beacon.class);
 					pico.addComponent(AccountList.class);
 					pico.addComponent(Settings.class);
@@ -358,7 +340,6 @@ public class Application {
 					pico.addComponent(LogEntryList.class);
 					pico.addComponent(LegHistory.class);
 					pico.addComponent(Status.class);
-					pico.addComponent(StringXorProcessor.class);
 					pico.addComponent(ActiveCores.class);
 					pico.addComponent(ActivityDetector.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(PortfolioStore.class, SqlitePortfolioStore.class);
@@ -368,10 +349,7 @@ public class Application {
 					pico.as(Characteristics.USE_NAMES).addComponent(PairTradingCoreFactoryImpl.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(MarketDataProvider.class);
 					pico.as(Characteristics.USE_NAMES).addComponent(PairDataProviderFactoryImpl.class);
-					
-					pico.as(Characteristics.USE_NAMES).addComponent(AmqpEngine.class);
-					pico.as(Characteristics.USE_NAMES).addComponent(AmqpProxy.class);
-					
+
 					Set<String> connectedAccounts = Collections.synchronizedSet(new HashSet<String>());
 					pico.addComponent(connectedAccounts);
 					
@@ -404,7 +382,6 @@ public class Application {
 					l.debug("shutting down executors");
 					pico.stop();
 					busExecutor.shutdownNow();
-					amqpBusExecutor.shutdownNow();
 					JUnique.releaseLock(iid);
 				} catch (Exception e) {
 					e.printStackTrace();
@@ -425,7 +402,7 @@ public class Application {
     		    
 		setDefaultValues();
 		createContents();
-		if (!mStatus.isPtlConnected()) {
+		if (!mStatus.isStoreReady()) {
 			MessageDialog.openError(shlPtlTrader, "Local Database Error",
 					"The local database could not be opened. Check the log for details.");
 		}
@@ -463,15 +440,6 @@ public class Application {
 		}
 
 	}
-	
-	@Subscribe
-	public void onAmqpConnect(AmqpConnect event) {
-		if (autoStarted || !runtimeParams.isAutoStart()) return;
-		autoStarted=true;
-		connectToIb();
-	}
-
-	
 
 	/**
 	 * Create contents of the window.
@@ -1589,45 +1557,8 @@ public class Application {
 		Composite compositeMiscSettings = new Composite(tabFolderMisc, SWT.NONE);
 		compositeMiscSettings.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
 		tbtmMiscSettings.setControl(compositeMiscSettings);
-		compositeMiscSettings.setLayout(new GridLayout(3, false));
-		
-		Group grpPairTradingLab = new Group(compositeMiscSettings, SWT.NONE);
-		grpPairTradingLab.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
-		grpPairTradingLab.setLayout(new GridLayout(2, false));
-		grpPairTradingLab.setLayoutData(new GridData(SWT.LEFT, SWT.FILL, false, true, 1, 1));
-		grpPairTradingLab.setText("Pair Trading Lab Authentication");
-		
-		Label lblPTLUsername = new Label(grpPairTradingLab, SWT.NONE);
-		lblPTLUsername.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false, 1, 1));
-		lblPTLUsername.setText("Access Key:");
-		
-		textPTLAccessKey = new Text(grpPairTradingLab, SWT.BORDER);
-		GridData gd_textPTLAccessKey = new GridData(SWT.FILL, SWT.CENTER, true, false, 1, 1);
-		gd_textPTLAccessKey.widthHint = 120;
-		textPTLAccessKey.setLayoutData(gd_textPTLAccessKey);
-		
-		Label lblPTLSecretKey = new Label(grpPairTradingLab, SWT.NONE);
-		lblPTLSecretKey.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false, 1, 1));
-		lblPTLSecretKey.setText("Secret Key:");
-		
-		textPTLAccessToken = new Text(grpPairTradingLab, SWT.BORDER | SWT.PASSWORD);
-		GridData gd_textPTLAccessToken = new GridData(SWT.FILL, SWT.CENTER, true, false, 1, 1);
-		gd_textPTLAccessToken.widthHint = 120;
-		textPTLAccessToken.setLayoutData(gd_textPTLAccessToken);
-		
-		btnPTLSaveToken = new Button(grpPairTradingLab, SWT.CHECK | SWT.CENTER);
-		btnPTLSaveToken.setText("Store secret key");
-		
-		btnPTLConnect = new Button(grpPairTradingLab, SWT.CENTER);
-		btnPTLConnect.addSelectionListener(new SelectionAdapter() {
-			@Override
-			public void widgetSelected(SelectionEvent e) {
+		compositeMiscSettings.setLayout(new GridLayout(1, false));
 
-			}
-		});
-		btnPTLConnect.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 1, 1));
-		btnPTLConnect.setText("Connect");
-		
 		Group grpInteractiveBrokers = new Group(compositeMiscSettings, SWT.NONE);
 		grpInteractiveBrokers.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
 		grpInteractiveBrokers.setLayout(new GridLayout(2, false));
@@ -1679,54 +1610,11 @@ public class Application {
 		btnIbConnect.setBounds(0, 0, 75, 25);
 		btnIbConnect.setText("Connect");
 		new Label(grpInteractiveBrokers, SWT.NONE);
-		
-		Group grpSpecialSettings = new Group(compositeMiscSettings, SWT.NONE);
-		grpSpecialSettings.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
-		grpSpecialSettings.setLayout(new GridLayout(1, false));
-		grpSpecialSettings.setLayoutData(new GridData(SWT.LEFT, SWT.FILL, false, true, 1, 1));
-		grpSpecialSettings.setText("Special Settings");
-		
-		btnConfidentialMode = new Button(grpSpecialSettings, SWT.CHECK | SWT.CENTER);
-		btnConfidentialMode.setText("Enable Confidential Mode");
-		btnConfidentialMode.setToolTipText("Use Confidential Mode if you do not want the application\nto send any trade statistics out to Pair Trading Lab website.");
-		Label lblConfidentialWarning = new Label(grpSpecialSettings, SWT.NONE);
-		lblConfidentialWarning.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false, 1, 1));
-		lblConfidentialWarning.setBounds(0, 0, 55, 15);
-		lblConfidentialWarning.setText("Warning: When using the confidential mode,\nonline reports/statistics do not work.");
+
 		sashForm1.setWeights(new int[] {3, 2, 3});
-		
+
 		final CoolBar coolBar = new CoolBar(shlPtlTrader, SWT.NONE);
 		coolBar.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
-
-		// PTL status (indicator + label + text)
-		CoolItem ptlStatusItem = new CoolItem(coolBar,SWT.NONE);
-
-		Composite composite = new Composite(coolBar, SWT.NONE);
-		composite.setLayout(new GridLayout(3, false));
-
-		lblPTLStatusLed = new Label(composite, SWT.HORIZONTAL);
-		lblPTLStatusLed.setImage(null);
-		GridData gd_led_1 = new GridData ();
-		gd_led_1.widthHint = 16;
-		gd_led_1.heightHint = 16;
-		lblPTLStatusLed.setLayoutData(gd_led_1);
-		lblPTLStatusLed.pack();
-		
-		Label lblPTLStatus = new Label(composite, SWT.NONE);
-		lblPTLStatus.setImage(null);
-		lblPTLStatus.setText("PairTradingLab Status:");
-		lblPTLStatus.pack();
-
-		textPtlStatus = new Text(composite, SWT.READ_ONLY);
-		GridData gd_ptl_status = new GridData ();
-		gd_ptl_status.widthHint = 120;
-		textPtlStatus.setLayoutData(gd_ptl_status);
-		textPtlStatus.pack();
-
-		composite.pack();
-		Point size = composite.getSize();
-		ptlStatusItem.setControl(composite);
-		ptlStatusItem.setSize(ptlStatusItem.computeSize(size.x, size.y));
 
 		// IB status (indicator + label + text)
 		CoolItem ibStatusItem = new CoolItem(coolBar, SWT.NONE);
@@ -2071,26 +1959,7 @@ public class Application {
 			}
 		});
 	}
-	
-	@Subscribe
-	public void onAmqpProblem(final AmqpProblem p) {
-		mSettings.setPtlConnectEnabled(true);
-		bus.post(new LogEvent(p.error.toString()));
-		if (p.error==AmqpError.AUTH_FAIL) {
-			Display.getDefault().syncExec(new Runnable()
-	        {
-	            @Override
-	            public void run()
-	            {
-	            	MessageDialog.openError(shlPtlTrader, "Pair Trading Lab Event Bus Connection Error", 
-	            			p.error.toString()+"\nYou can still use this application, but monitoring will not work and trade history/results are not being sent to Pair Trading Lab.");
-	            }
-	       });
-		}
-		
-	
-	}
-	
+
 	protected void finishBindings() {
 		// put manually implemented bindings here (bindings which prevent the WindowBuilder to run)
 
@@ -2202,16 +2071,6 @@ public class Application {
 		UpdateValueStrategy strategy_2 = new UpdateValueStrategy();
 		strategy_2.setConverter(new Boolean2Led());
 		bindingContext.bindValue(observeImageLblIbStatusLedObserveWidget, ibConnectedMStatusObserveValue, null, strategy_2);
-		//
-		IObservableValue<Image> observeImageLblPTLStatusLedObserveWidget = WidgetProperties.image().observe(lblPTLStatusLed);
-		IObservableValue ptlConnectedMStatusObserveValue = BeanProperties.value("ptlConnected").observe(mStatus);
-		UpdateValueStrategy strategy_3 = new UpdateValueStrategy();
-		UpdateValueStrategy strategy_5 = new UpdateValueStrategy();
-		strategy_5.setConverter(new Boolean2Led());
-		bindingContext.bindValue(observeImageLblPTLStatusLedObserveWidget, ptlConnectedMStatusObserveValue, strategy_3, strategy_5);
-		//
-		IObservableValue<String> observeTextTextPtlStatusObserveWidget = WidgetProperties.text(SWT.Modify).observe(textPtlStatus);
-		bindingContext.bindValue(observeTextTextPtlStatusObserveWidget, ptlConnectedMStatusObserveValue, UpdateValueStrategy.never(), UpdateValueStrategy.create(new IbConnected2String()));
 		//
 		IObservableValue<String> observeTextTextPairBasicStock1ObserveWidget = WidgetProperties.text(SWT.Modify).observe(textPairBasicStock1);
 		IObservableValue observeSingleSelectionTableViewerPortfPairs_1 = ViewerProperties.singleSelection().observe(tableViewerPortfPairs);
@@ -2486,18 +2345,6 @@ public class Application {
 		IObservableValue tableViewerPortfPairsOpenableObserveDetailValue_2 = BeanProperties.value(PairStrategy.class, "deletable", Boolean.class).observeDetail(observeSingleSelectionTableViewerPortfPairs_36);
 		bindingContext.bindValue(observeEnabledBtnPairDeleteObserveWidget, tableViewerPortfPairsOpenableObserveDetailValue_2, null, null);
 		//
-		IObservableValue<String> observeTextTextPTLAccessKeyObserveWidget = WidgetProperties.text(SWT.Modify).observeDelayed(300, textPTLAccessKey);
-		IObservableValue ptlAccessKeyMSettingsObserveValue = BeanProperties.value("ptlAccessKey").observe(mSettings);
-		bindingContext.bindValue(observeTextTextPTLAccessKeyObserveWidget, ptlAccessKeyMSettingsObserveValue, null, null);
-		//
-		IObservableValue<String> observeTextTextPTLAccessTokenObserveWidget = WidgetProperties.text(SWT.Modify).observeDelayed(300, textPTLAccessToken);
-		IObservableValue ptlSecretKeyMSettingsObserveValue = BeanProperties.value("ptlSecretKey").observe(mSettings);
-		bindingContext.bindValue(observeTextTextPTLAccessTokenObserveWidget, ptlSecretKeyMSettingsObserveValue, null, null);
-		//
-		IObservableValue<Boolean> observeEnabledBtnPTLConnectObserveWidget = WidgetProperties.enabled().observe(btnPTLConnect);
-		IObservableValue ptlConnectEnabledMSettingsObserveValue = BeanProperties.value("ptlConnectEnabled").observe(mSettings);
-		bindingContext.bindValue(observeEnabledBtnPTLConnectObserveWidget, ptlConnectEnabledMSettingsObserveValue, null, null);
-		//
 		ObservableListContentProvider listContentProvider_7 = new ObservableListContentProvider();
 		IObservableMap[] observeMaps_5 = BeansObservables.observeMaps(listContentProvider_7.getKnownElements(), LegHistoryEntry.class, new String[]{"datetimeS", "account", "symbol", "action", "realizedPlS", "qty", "priceS", "valueS", "commissionsS", "fillTimeS", "slippageS"});
 		tableViewerLegHistory.setLabelProvider(new ObservableMapLabelProvider(observeMaps_5));
@@ -2525,28 +2372,10 @@ public class Application {
 		IObservableValue tableViewerPortfoliosBindEnabledObserveDetailValue_1 = BeanProperties.value(Portfolio.class, "bindEnabled", Boolean.class).observeDetail(observeSingleSelectionTableViewerPortfolios_10);
 		bindingContext.bindValue(observeEnabledSpinnerPortfMaxPairsOpenObserveWidget, tableViewerPortfoliosBindEnabledObserveDetailValue_1, null, null);
 		//
-		IObservableValue<Boolean> observeSelectionBtnPTLSaveTokenObserveWidget = WidgetProperties.buttonSelection().observeDelayed(300, btnPTLSaveToken);
-		IObservableValue savePtlSecretKeyMSettingsObserveValue = BeanProperties.value("savePtlSecretKey").observe(mSettings);
-		bindingContext.bindValue(observeSelectionBtnPTLSaveTokenObserveWidget, savePtlSecretKeyMSettingsObserveValue, null, null);
-		//
-		IObservableValue<Boolean> observeSelectionBtnConfidentialModeObserveWidget = WidgetProperties.buttonSelection().observeDelayed(300, btnConfidentialMode);
-		IObservableValue enableConfidentialModeMSettingsObserveValue = BeanProperties.value("enableConfidentialMode").observe(mSettings);
-		bindingContext.bindValue(observeSelectionBtnConfidentialModeObserveWidget, enableConfidentialModeMSettingsObserveValue, null, null);
-		//
 		IObservableValue<Boolean> observeEnabledBtnPairResumeObserveWidget = WidgetProperties.enabled().observe(btnPairResume);
 		IObservableValue observeSingleSelectionTableViewerPortfPairs_38 = ViewerProperties.singleSelection().observe(tableViewerPortfPairs);
 		IObservableValue tableViewerPortfPairsResumableObserveDetailValue = BeanProperties.value(PairStrategy.class, "resumable", Boolean.class).observeDetail(observeSingleSelectionTableViewerPortfPairs_38);
 		bindingContext.bindValue(observeEnabledBtnPairResumeObserveWidget, tableViewerPortfPairsResumableObserveDetailValue, null, null);
-		//
-		IObservableValue<Boolean> observeEnabledTextPTLAccessKeyObserveWidget = WidgetProperties.enabled().observe(textPTLAccessKey);
-		UpdateValueStrategy strategy_11 = new UpdateValueStrategy();
-		strategy_11.setConverter(new Inverter());
-		bindingContext.bindValue(observeEnabledTextPTLAccessKeyObserveWidget, ptlConnectedMStatusObserveValue, null, strategy_11);
-		//
-		IObservableValue<Boolean> observeEnabledTextPTLAccessTokenObserveWidget = WidgetProperties.enabled().observe(textPTLAccessToken);
-		UpdateValueStrategy strategy_12 = new UpdateValueStrategy();
-		strategy_12.setConverter(new Inverter());
-		bindingContext.bindValue(observeEnabledTextPTLAccessTokenObserveWidget, ptlConnectedMStatusObserveValue, null, strategy_12);
 		//
 		return bindingContext;
 	}
