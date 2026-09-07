@@ -64,6 +64,10 @@ import org.eclipse.jface.dialogs.MessageDialog;
 import it.sauronsoftware.junique.AlreadyLockedException;
 import it.sauronsoftware.junique.JUnique;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -71,6 +75,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -95,10 +100,17 @@ import com.tictactec.ta.lib.MAType;
 
 import org.eclipse.swt.widgets.Spinner;
 
+import org.eclipse.swt.widgets.FileDialog;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.pairtradinglab.ptltrader.events.AmqpConnect;
 import com.pairtradinglab.ptltrader.events.AmqpProblem;
 import com.pairtradinglab.ptltrader.events.IbConnectionFailed;
 import com.pairtradinglab.ptltrader.events.LogEvent;
+import com.pairtradinglab.ptltrader.store.PortfolioDocuments;
+import com.pairtradinglab.ptltrader.store.PortfolioImporter;
 import com.pairtradinglab.ptltrader.store.PortfolioStore;
 import com.pairtradinglab.ptltrader.store.SqlitePortfolioStore;
 import com.pairtradinglab.ptltrader.events.StoreProblem;
@@ -157,14 +169,16 @@ public class Application {
 	private final RuntimeParams runtimeParams;
 	private final SystemMonitor systemMonitor;
 	private final Set<String> connectedAccounts;
-	
-	
+	private final PairStrategyFactory pairStrategyFactory;
+
+
 	public Application(PortfolioList mPortfolioList, PortfolioStore portfolioStore,
 			Status mStatus, LogEntryList mLogEntryList,
 			TradeHistory mTradeHistory, Settings mSettings,
 			AccountList mAccountList, Beacon beacon, Logger logger,
 			EventBus bus, List<SimpleWrapper> ibWrappers, AmqpEngine amqpEngine, AmqpProxy amqpProxy, LegHistory mLegHistory,
-			RuntimeParams runtimeParams, SystemMonitor systemMonitor, Set<String> connectedAccounts) {
+			RuntimeParams runtimeParams, SystemMonitor systemMonitor, Set<String> connectedAccounts,
+			PairStrategyFactory pairStrategyFactory) {
 		super();
 		this.mPortfolioList = mPortfolioList;
 		this.portfolioStore = portfolioStore;
@@ -183,7 +197,8 @@ public class Application {
 		this.runtimeParams = runtimeParams;
 		this.systemMonitor = systemMonitor;
 		this.connectedAccounts = connectedAccounts;
-		
+		this.pairStrategyFactory = pairStrategyFactory;
+
 	}
 	
 	private SimpleWrapper getWrapper() {
@@ -289,7 +304,6 @@ public class Application {
 	private static final ExecutorService amqpBusExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setNameFormat("amqp-bus").build());
 	private Table tableLegHistory;
 	private TableViewer tableViewerLegHistory;
-	MenuItem mntmReloadPortfolios;
 	private Table tableAccounts;
 	private TableViewer tableViewerAccounts;
 	private Button btnPTLSaveToken;
@@ -441,8 +455,13 @@ public class Application {
 		//mPortfolioList.initialize(ibWrapper.getIbSocket(), mSettings.getIbClientId());
 		
 		bus.post(new LogEvent("application started"));
-		
-		
+
+		if (mPortfolioList.getPortfolios().isEmpty()) {
+			bus.post(new LogEvent(
+					"no portfolios yet - use File > Import Portfolio... to load a portfolio "
+					+ "exported from Pair Trading Lab, or File > New Portfolio... to start one"));
+		}
+
 	}
 	
 	@Subscribe
@@ -1748,15 +1767,55 @@ public class Application {
 		Menu menuFile = new Menu(mntmFile);
 		mntmFile.setMenu(menuFile);
 		
-		mntmReloadPortfolios = new MenuItem(menuFile, SWT.NONE);
-		mntmReloadPortfolios.addSelectionListener(new SelectionAdapter() {
+		MenuItem mntmImportPortfolio = new MenuItem(menuFile, SWT.NONE);
+		mntmImportPortfolio.setText("Import Portfolio...");
+		mntmImportPortfolio.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
-				portfolioStore.load();
+				importPortfolio();
 			}
 		});
-		mntmReloadPortfolios.setText("Update Portfolios From PTL");
-		
+
+		MenuItem mntmExportPortfolio = new MenuItem(menuFile, SWT.NONE);
+		mntmExportPortfolio.setText("Export Portfolio...");
+		mntmExportPortfolio.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				exportSelectedPortfolio();
+			}
+		});
+
+		new MenuItem(menuFile, SWT.SEPARATOR);
+
+		MenuItem mntmNewPortfolio = new MenuItem(menuFile, SWT.NONE);
+		mntmNewPortfolio.setText("New Portfolio...");
+		mntmNewPortfolio.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				createPortfolio();
+			}
+		});
+
+		MenuItem mntmDeletePortfolio = new MenuItem(menuFile, SWT.NONE);
+		mntmDeletePortfolio.setText("Delete Portfolio");
+		mntmDeletePortfolio.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				deleteSelectedPortfolio();
+			}
+		});
+
+		MenuItem mntmAddPair = new MenuItem(menuFile, SWT.NONE);
+		mntmAddPair.setText("Add Pair...");
+		mntmAddPair.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				addPairToSelectedPortfolio();
+			}
+		});
+
+		new MenuItem(menuFile, SWT.SEPARATOR);
+
 		MenuItem mntmExit = new MenuItem(menuFile, SWT.NONE);
 		mntmExit.addSelectionListener(new SelectionAdapter() {
 			@Override
@@ -1818,6 +1877,150 @@ public class Application {
 	}
 	
 	
+	private Portfolio getSelectedPortfolio() {
+		Object sel = ((org.eclipse.jface.viewers.IStructuredSelection)
+				tableViewerPortfolios.getSelection()).getFirstElement();
+		return (sel instanceof Portfolio) ? (Portfolio) sel : null;
+	}
+
+	private void importPortfolio() {
+		FileDialog fd = new FileDialog(shlPtlTrader, SWT.OPEN);
+		fd.setText("Import Portfolio");
+		fd.setFilterExtensions(new String[] { "*.json", "*.*" });
+		fd.setFilterNames(new String[] { "Portfolio export (*.json)", "All files" });
+		String path = fd.open();
+		if (path == null) return;
+
+		try {
+			String json = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+			List<ObjectNode> docs = PortfolioImporter.parse(json, new ObjectMapper());
+
+			int pairs = 0;
+			for (ObjectNode doc : docs) {
+				pairs += doc.get("strategies").size();
+				portfolioStore.insertPortfolioDocument(doc);
+			}
+			// insertPortfolioDocument() does not flush or reload on its own (so a
+			// multi-portfolio import doesn't trigger a reload per document); do it
+			// once here so the new portfolio(s) show up in the UI.
+			portfolioStore.flush();
+			portfolioStore.load();
+			bus.post(new LogEvent(String.format("imported %d portfolio(s), %d pair(s)", docs.size(), pairs)));
+			MessageDialog.openInformation(shlPtlTrader, "Import Complete",
+					String.format("Imported %d portfolio(s) containing %d pair(s).", docs.size(), pairs));
+		} catch (PortfolioImporter.InvalidImportException e) {
+			MessageDialog.openError(shlPtlTrader, "Import Failed", e.getMessage());
+		} catch (IOException e) {
+			MessageDialog.openError(shlPtlTrader, "Import Failed", "Unable to read the file: " + e.getMessage());
+		}
+	}
+
+	private void exportSelectedPortfolio() {
+		Portfolio p = getSelectedPortfolio();
+		if (p == null) {
+			MessageDialog.openError(shlPtlTrader, "Error", "Please select a portfolio first.");
+			return;
+		}
+		FileDialog fd = new FileDialog(shlPtlTrader, SWT.SAVE);
+		fd.setText("Export Portfolio");
+		fd.setFilterExtensions(new String[] { "*.json" });
+		fd.setFileName(p.getName().replaceAll("[^A-Za-z0-9._-]", "_") + ".json");
+		fd.setOverwrite(true);
+		String path = fd.open();
+		if (path == null) return;
+
+		try {
+			ObjectMapper mapper = new ObjectMapper();
+			ArrayNode root = mapper.createArrayNode();
+			// Config only: runtime state describes a position in one account and
+			// must not travel with the configuration.
+			root.add(PortfolioDocuments.build(p, mapper));
+			Files.write(Paths.get(path), mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(root));
+			bus.post(new LogEvent("exported portfolio to " + path));
+		} catch (IOException e) {
+			MessageDialog.openError(shlPtlTrader, "Export Failed", e.getMessage());
+		}
+	}
+
+	private void createPortfolio() {
+		String name = new NewPortfolioDialog(shlPtlTrader).open();
+		if (name == null) return;
+
+		ObjectMapper mapper = new ObjectMapper();
+		ObjectNode doc = mapper.createObjectNode();
+		doc.put("uid", UUID.randomUUID().toString());
+		doc.put("name", name);
+		doc.put("account_code", "");
+		doc.put("max_pairs_open", 10);
+		doc.put("account_alloc", 100);
+		doc.put("master_status", Portfolio.MASTER_STATUS_ACTIVE);
+		doc.put("pdt_rules", Portfolio.PDT_ENABLE_25K);
+		doc.putArray("strategies");
+		portfolioStore.insertPortfolioDocument(doc);
+		// Same reason as importPortfolio(): insertPortfolioDocument() no longer
+		// flushes or reloads by itself.
+		portfolioStore.flush();
+		portfolioStore.load();
+		bus.post(new LogEvent("created portfolio " + name));
+	}
+
+	private void deleteSelectedPortfolio() {
+		Portfolio p = getSelectedPortfolio();
+		if (p == null) {
+			MessageDialog.openError(shlPtlTrader, "Error", "Please select a portfolio first.");
+			return;
+		}
+		if (!p.getAccountCode().isEmpty()) {
+			MessageDialog.openError(shlPtlTrader, "Error",
+					"Unbind this portfolio from its account before deleting it.");
+			return;
+		}
+		for (PairStrategy s : p.getPairStrategies()) {
+			if (!PairStrategy.STATUS_NONE.equals(s.getStatus())) {
+				MessageDialog.openError(shlPtlTrader, "Error",
+						"This portfolio has a pair with an open position and cannot be deleted.");
+				return;
+			}
+		}
+		if (!MessageDialog.openConfirm(shlPtlTrader, "Confirm Operation", String.format(
+				"Are you sure you want to delete the portfolio \"%s\" and all %d of its pairs? "
+				+ "This cannot be undone.", p.getName(), p.getPairStrategies().size()))) {
+			return;
+		}
+		String name = p.getName();
+		p.stopStrategyCores();
+		portfolioStore.deletePortfolio(p);
+		bus.post(new LogEvent("deleted portfolio " + name));
+	}
+
+	private void addPairToSelectedPortfolio() {
+		Portfolio p = getSelectedPortfolio();
+		if (p == null) {
+			MessageDialog.openError(shlPtlTrader, "Error", "Please select a portfolio first.");
+			return;
+		}
+		AddPairDialog dlg = new AddPairDialog(shlPtlTrader);
+		if (dlg.open() != org.eclipse.jface.window.Window.OK) return;
+		AddPairDialog.Result r = dlg.getResult();
+		if (r == null) return;
+
+		for (PairStrategy existing : p.getPairStrategies()) {
+			if (r.stock1.equals(existing.getStock1()) && r.stock2.equals(existing.getStock2())) {
+				MessageDialog.openError(shlPtlTrader, "Error", "This pair is already in the portfolio.");
+				return;
+			}
+		}
+
+		PairStrategy s = pairStrategyFactory.createForPortfolio(p, r.stock1, r.stock2, r.tradeAs1, r.tradeAs2);
+		s.setModel(r.model);
+		// New pairs start inactive so that adding one can never begin trading it
+		// by surprise.
+		s.setTradingStatus(PairStrategy.TRADING_STATUS_INACTIVE);
+		p.addPairStrategy(s);
+		portfolioStore.savePortfolio(p);
+		bus.post(new LogEvent(String.format("added pair %s / %s", r.stock1, r.stock2)));
+	}
+
 	private void connectToIb() {
 		bus.post(new LogEvent("Connecting to Interactive Brokers API"));
 		mStatus.setIbConnecting(true);
@@ -1890,10 +2093,7 @@ public class Application {
 	
 	protected void finishBindings() {
 		// put manually implemented bindings here (bindings which prevent the WindowBuilder to run)
-		IObservableValue<Boolean> observeEnabledMntmReloadPortfolios = WidgetProperties.enabled().observe(mntmReloadPortfolios);
-		IObservableValue ptlConnectedMStatusObserveValue = BeanProperties.value("ptlConnected").observe(mStatus);
-		m_bindingContext.bindValue(observeEnabledMntmReloadPortfolios, ptlConnectedMStatusObserveValue, null, null);
-		
+
 		// bind slot usage bar progressBarPairSlotUsage, it has to use custom binding solution
 		IObservableValue observeSingleSelectionTableViewerPortfolios_2 = ViewerProperties.singleSelection().observe(tableViewerPortfolios);
 		IObservableValue tableViewerPortfoliosSlotUsageObserveDetailValue = BeanProperties.value(Portfolio.class, "slotUsage", Integer.class).observeDetail(observeSingleSelectionTableViewerPortfolios_2);
