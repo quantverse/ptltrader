@@ -192,14 +192,22 @@ public class SqlitePortfolioStoreLifecycleTest {
 		}
 	}
 
-	/** Collects every StoreProblem the store posts, so the test can assert on none. */
-	public static class ProblemCollector {
+	/**
+	 * Registers a subscriber that collects every StoreProblem the store posts, so a
+	 * test can assert on none. Deliberately an anonymous class: Gradle 4's test
+	 * detector runs named nested classes of a test class as tests when it cannot
+	 * read their superclass (as on JDK 17+), and they then fail with "No runnable
+	 * methods". Anonymous classes are never picked up.
+	 */
+	private static List<StoreProblem> collectStoreProblems(EventBus bus) {
 		final List<StoreProblem> problems = Collections.synchronizedList(new ArrayList<StoreProblem>());
-
-		@Subscribe
-		public void onStoreProblem(StoreProblem p) {
-			problems.add(p);
-		}
+		bus.register(new Object() {
+			@Subscribe
+			public void onStoreProblem(StoreProblem p) {
+				problems.add(p);
+			}
+		});
+		return problems;
 	}
 
 	/**
@@ -216,8 +224,11 @@ public class SqlitePortfolioStoreLifecycleTest {
 	@Test
 	public void testDeletedPortfolioDoesNotComeBackAfterRestart() throws Exception {
 		EventBus bus = new EventBus("lifecycletest");
-		ProblemCollector problems = new ProblemCollector();
-		bus.register(problems);
+		List<StoreProblem> problems = collectStoreProblems(bus);
+		// Prove the collector can hear before relying on it hearing nothing below.
+		bus.post(new StoreProblem("probe", StoreError.IO_FAILURE, null));
+		assertEquals("the StoreProblem collector must receive events", 1, problems.size());
+		problems.clear();
 
 		PortfolioList first = newPortfolioList(bus);
 		SqlitePortfolioStore store = newStore(bus, first, new Status());
@@ -250,7 +261,7 @@ public class SqlitePortfolioStoreLifecycleTest {
 			reopened.stop();
 		}
 
-		assertEquals("no StoreProblem may be posted by this sequence: " + problems.problems,
-				0, problems.problems.size());
+		assertEquals("no StoreProblem may be posted by this sequence: " + problems,
+				0, problems.size());
 	}
 }
