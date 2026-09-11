@@ -107,7 +107,7 @@ src/main/java/com/pairtradinglab/ptltrader/
     trading/kernelfx/        numeric kernel for the Kalman models
     org/eclipse/wb/swt/      WindowBuilder resource manager
 src/main/resources/…         icons, LED images
-src/test/java/…              JUnit tests (153 test methods)
+src/test/java/…              JUnit tests (176 test methods)
 ```
 
 `Application.java` is largely generated/maintained by **Eclipse WindowBuilder**.
@@ -305,7 +305,12 @@ on the strategy node; the portfolio node supplies `uid`, `name`, `account_code`,
 everything above except the RSI filter pair (which `updateFromJson()` defaults)
 and the three state fields (which the importer strips rather than requires). On
 import, `uid` is regenerated for the portfolio and every strategy and
-`account_code` is cleared, regardless of what the file contained.
+`account_code` is cleared, regardless of what the file contained. The importer then
+runs `PortfolioDocumentValidator`, which refuses a file that would still fail to
+load: a non-numeric value in a numeric field (which `asInt()`/`asDouble()` would
+silently turn into zero), a `ratio_ma_type` outside the `MAType` range, or an
+unknown `timezone`. `load()` runs the same validator on every stored document, and
+additionally checks each strategy's `uid` and `last_opened_datetime`.
 
 ### 6.2 Interactive Brokers
 
@@ -566,7 +571,7 @@ the check passes.
 ./gradlew test          # or ./gradlew build
 ```
 
-153 JUnit 4 test methods, Mockito for the IB socket, event bus, and logger
+176 JUnit 4 test methods, Mockito for the IB socket, event bus, and logger
 collaborators. Coverage is deliberately concentrated where the money is, plus the
 persistence seam that replaced PTL:
 
@@ -577,7 +582,7 @@ persistence seam that replaced PTL:
 | `kernelfx` | `SubModelKalman*Test`, `OlsCellTest`, `SharpeCellTest`, `SimpleCellTest`, `MemoryCellTest`, `PairPositionTest`, `PerfTracker*Test`, `UsageTrackerTest`, `SimpleStrategyTest` |
 | Providers / model | `PairDataProviderTest`, `HistoricalDataProviderTest`, `PortfolioTest`, `MultiRatioTest` |
 | Serialization | `SerializationRoundTripTest` (6) — the annotation regression test described in the notes below |
-| `store` | `DatabaseTest` (5, schema/migration), `SqlitePortfolioStoreTest` (9, CRUD against a temp file DB), `PortfolioDocumentsTest` (7, build/splice), `PortfolioImporterTest` (14, validation/uid regeneration/rejection), `HistoryPersistenceTest` (5, insert + startup backfill) |
+| `store` | `DatabaseTest` (5, schema/migration), `SqlitePortfolioStoreTest` (13, CRUD against a temp file DB and the unstarted-store failure paths), `SqlitePortfolioStoreLifecycleTest` (8, real start/stop cycles: restart survival, delete races on an async bus, all-or-nothing import, skipping an unloadable document, shutdown draining), `PortfolioDocumentsTest` (9, build/splice), `PortfolioDocumentValidatorTest` (4), `PortfolioImporterTest` (19, validation/uid regeneration/rejection), `HistoryPersistenceTest` (5, insert + startup backfill) |
 | `DataDirectoryTest` | 7 — per-platform path resolution |
 
 Conventions worth following when adding tests:
@@ -656,8 +661,9 @@ The seam for loading portfolios from something other than a `PortfolioStore`
 export is `PortfolioImporter.parse(json, mapper)`, called by
 `Application.importPortfolio()` after the user picks a file. It returns a list of
 validated, freshly re-uid'd `ObjectNode` documents ready for
-`PortfolioStore.insertPortfolioDocument()`; nothing is inserted unless every
-portfolio and strategy in the file validates. To accept a different file format,
+`PortfolioStore.insertPortfolioDocuments()`; nothing is inserted unless every
+portfolio and strategy in the file validates, and the insert itself is a single
+transaction. To accept a different file format,
 write an adapter that produces the same document shape (§6.1) and either extend
 `PortfolioImporter.parse()` to recognise it or add a second entry point that
 converts to it before calling `prepare()`. Whatever the source, the GNU GPL v3
@@ -685,6 +691,7 @@ Define an immutable event class in `events/` or `trading/events/`, post it with
 | Pair stuck at `wait for manual intervention` | read the log for the `pair blocked for auto execution, reason:` line, fix the underlying cause, then Resume |
 | Repeated `historical data request failed` | IB pacing violations or missing historical-data permissions; retries are 11 minutes apart by design |
 | "Local Database Error" dialog at startup | the database could not be opened or migrated (e.g. an unreadable file, a permissions problem, or `PRAGMA` failure) — check the log; `Status.storeReady` stays `false` and nothing is loaded |
+| "Portfolios Not Loaded" warning at startup | one or more stored portfolio documents failed `PortfolioDocumentValidator` (for example after an external edit of the database) and were skipped; the rest loaded normally. The log names each one and the reason. A skipped portfolio stays in the database but is **not shown or traded** until it is fixed |
 | Database appears locked / writes keep failing | another process has the file open — check for a second instance under a different launch method; single-instance enforcement (§4.2) should prevent this within the app itself |
 | "database … was written by a newer version of PTL Trader" | the database's `schema_version` is higher than this build's `Database.SCHEMA_VERSION`; use the newer build, or a fresh profile |
 | Portfolios/strategy changes not surviving a restart | check the log for `database write failed` / `database write permanently failed` (`ARCHITECTURE.md` §8.4) — a write is retried 3 times, then given up on and reported via `StoreProblem` |

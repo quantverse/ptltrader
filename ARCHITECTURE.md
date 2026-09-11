@@ -522,7 +522,7 @@ same sync-out events plus the two events that used to reach PTL only via AMQP:
 
 | Old path | Now |
 |---|---|
-| `GET /portfolios` on connect | `load()` in `start()`: read every `portfolios.document`, splice in `strategy_state`, feed `PortfolioList.updateFromJson()` + `initialize()` |
+| `GET /portfolios` on connect | `load()` in `start()`: read every `portfolios.document`, splice in `strategy_state`, validate each with `PortfolioDocumentValidator` (a document that would throw in `updateFromJson()` is skipped and reported, not allowed to stop the rest loading), feed `PortfolioList.updateFromJson()` + `initialize()` |
 | `GET /transactionhistories` / `GET /pairtradehistories` | `loadHistories()`: most recent 1000 rows of `leg_history` / `trade_history` |
 | `PUT /portfolios/{uid}` / `PUT /strategies/{uid}` on `…SyncOutRequest` | upsert the portfolio's JSON document |
 | `PUT /strategies/{uid}` on `PairStateUpdated` | upsert a row in `strategy_state` |
@@ -539,8 +539,19 @@ connection — read or write — stays confined to that one thread.
 queued write is attempted at most `WRITE_ATTEMPTS` (3) times, with a short backoff
 between attempts. On the third failure the store logs at `ERROR`, posts a
 `LogEvent` (visible in the Log tab) and a `StoreProblem(IO_FAILURE)`, and gives up
-— retrying forever would only hide a failing disk. `flush()` (used by import/export
-and at shutdown) blocks until the queue is drained, with the same bounded timeout.
+— retrying forever would only hide a failing disk. `flush()` (used at shutdown)
+blocks until the queue is drained, with the same bounded timeout. User-initiated
+inserts are different: `insertPortfolioDocuments()`, used by import and New
+Portfolio, runs synchronously on `db-worker` in one transaction and throws
+`StoreException` on failure, so the UI never reports a portfolio as saved when it
+was not, and a failed import leaves nothing behind.
+
+**Deleted portfolios.** The bus is asynchronous, so a `…SyncOutRequest` or
+`PairStateUpdated` dispatched before `deletePortfolio()` detached the portfolio can
+still be delivered after the delete. `deletePortfolio()` records the uid before it
+queues the delete, and the queued writes of `savePortfolio()` and
+`saveStrategyState()` check that record on `db-worker` and drop a late write rather
+than re-insert the deleted row.
 
 **Startup and shutdown order.** `start()` opens and migrates the database, then
 calls `load()` and `loadHistories()`, and only then registers on the bus — in that
@@ -548,7 +559,7 @@ order, so a `PairStateUpdated` or `…SyncOutRequest` arriving during startup ca
 never race the initial load, and a live `TransactionEvent`/`HistoryEntry` during
 startup can't be double-counted by `loadHistories()`. History backfill is
 deliberately its own step rather than part of `load()`: portfolio import calls
-`flush()` then `load()` to refresh the UI, and `TradeHistory`/`LegHistory` do not
+`load()` to refresh the UI after committing, and `TradeHistory`/`LegHistory` do not
 deduplicate, so folding backfill into `load()` would re-append history rows on
 every import. `stop()` unregisters from the bus, flushes, interrupts and joins
 `db-worker`, then closes the database.
@@ -574,7 +585,8 @@ main()
  │       load() → PortfolioList.updateFromJson() + initialize(),
  │       loadHistories(), then bus.register(this)
  ├ window.open()  → createContents(), data bindings, SWT event loop
- │   └ if !Status.storeReady: "Local Database Error" dialog
+ │   └ if !Status.storeReady: "Local Database Error" dialog;
+ │     else if Status.loadWarning is set: "Portfolios Not Loaded" warning
  └ on shell activation, if -autostart: connectToIb()
 ```
 
@@ -627,10 +639,14 @@ BeaconFlash / Tick
 
 `open()` returns when the shell is disposed. `main` then calls
 `PortfolioList.stopAllCores()`, polls `ActiveCores.getActiveCores()` once a second
-until every core thread has deregistered, and only then stops the container and the
-executors and releases the JUnique lock. Cores deliberately drain their queues
-before exiting, so an in-flight order-status message is still processed during
-shutdown.
+until every core thread has deregistered. `ShutdownSequence.beforeContainerStop()`
+then waits (bounded) for the bus executor to go idle, so a `HistoryEntry`,
+`TransactionEvent` or `PairStateUpdated` a core posted just before exiting reaches
+the store rather than being dropped, and saves any portfolio with edits the
+once-a-minute beacon has not synced out yet. Only then does `main` stop the
+container and the executors and release the JUnique lock. Cores deliberately drain
+their queues before exiting, so an in-flight order-status message is still
+processed during shutdown.
 
 ---
 
