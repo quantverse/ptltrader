@@ -408,6 +408,9 @@ public class Application {
 		if (!mStatus.isStoreReady()) {
 			MessageDialog.openError(shlPtlTrader, "Local Database Error",
 					"The local database could not be opened or read. Check the log for details.");
+		} else if (!mStatus.getLoadWarning().isEmpty()) {
+			// Posted before anything was listening on the bus, so shown from here.
+			MessageDialog.openWarning(shlPtlTrader, "Portfolios Not Loaded", mStatus.getLoadWarning());
 		}
 		aboutDialog = new AboutDialog(shlPtlTrader, SWT.PRIMARY_MODAL);
 		shlPtlTrader.open();

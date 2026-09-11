@@ -171,14 +171,16 @@ public class SqlitePortfolioStoreTest {
 	}
 
 	@Test
-	public void testReadDocumentsOrderedByName() throws Exception {
+	public void testReadStoredDocumentsOrderedByName() throws Exception {
 		SqlitePortfolioStore.upsertDocument(db.getConnection(), "P2", "Beta", "{\"uid\":\"P2\"}");
 		SqlitePortfolioStore.upsertDocument(db.getConnection(), "P1", "Alpha", "{\"uid\":\"P1\"}");
 
-		List<String> docs = SqlitePortfolioStore.readDocuments(db.getConnection());
+		List<SqlitePortfolioStore.StoredDocument> docs = SqlitePortfolioStore.readStoredDocuments(db.getConnection());
 		assertEquals(2, docs.size());
-		assertEquals("P1", mapper.readTree(docs.get(0)).get("uid").asText());
-		assertEquals("P2", mapper.readTree(docs.get(1)).get("uid").asText());
+		assertEquals("P1", docs.get(0).uid);
+		assertEquals("Alpha", docs.get(0).name);
+		assertEquals("P1", mapper.readTree(docs.get(0).document).get("uid").asText());
+		assertEquals("P2", mapper.readTree(docs.get(1).document).get("uid").asText());
 	}
 
 	// ---- behavior of the instance itself, with mocked collaborators and no
@@ -373,7 +375,7 @@ public class SqlitePortfolioStoreTest {
 		assertEquals(".PairTradingModelKalmanAutoState",
 				mapper.readTree(states.get("S1").lastModelState).get("@class").asText());
 
-		String document = SqlitePortfolioStore.readDocuments(db.getConnection()).get(0);
+		String document = SqlitePortfolioStore.readStoredDocuments(db.getConnection()).get(0).document;
 		List<String> corrupt = new ArrayList<String>();
 		ObjectNode spliced = PortfolioDocuments.splice(mapper.readTree(document), states, mapper, corrupt);
 		assertTrue("the stored state must be readable", corrupt.isEmpty());

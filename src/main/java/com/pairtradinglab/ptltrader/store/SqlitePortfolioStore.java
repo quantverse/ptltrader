@@ -19,6 +19,7 @@
 package com.pairtradinglab.ptltrader.store;
 
 import java.io.File;
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -319,11 +320,26 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		return out;
 	}
 
-	static List<String> readDocuments(Connection c) throws SQLException {
-		List<String> out = new ArrayList<String>();
+	/** One row of the portfolios table. */
+	static final class StoredDocument {
+		final String uid;
+		final String name;
+		final String document;
+
+		StoredDocument(String uid, String name, String document) {
+			this.uid = uid;
+			this.name = name;
+			this.document = document;
+		}
+	}
+
+	static List<StoredDocument> readStoredDocuments(Connection c) throws SQLException {
+		List<StoredDocument> out = new ArrayList<StoredDocument>();
 		try (Statement st = c.createStatement();
-			 ResultSet rs = st.executeQuery("SELECT document FROM portfolios ORDER BY name, uid")) {
-			while (rs.next()) out.add(rs.getString("document"));
+			 ResultSet rs = st.executeQuery("SELECT uid, name, document FROM portfolios ORDER BY name, uid")) {
+			while (rs.next()) {
+				out.add(new StoredDocument(rs.getString("uid"), rs.getString("name"), rs.getString("document")));
+			}
 		}
 		return out;
 	}
@@ -484,21 +500,42 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		// Written on db-worker, read here after the latch in runOnWorker(), which
 		// establishes the happens-before edge.
 		final List<String> corruptModelStates = new ArrayList<String>();
+		// Also written on db-worker and read after the latch.
+		final List<String> skippedPortfolios = new ArrayList<String>();
 		try {
 			ArrayNode root = runOnWorker(new WorkerTask<ArrayNode>() {
 				@Override
 				public ArrayNode run(Connection c) throws Exception {
-					List<String> documents = readDocuments(c);
 					ArrayNode r = mapper.createArrayNode();
-					for (String doc : documents) {
-						JsonNode node = mapper.readTree(doc);
-						Map<String, StrategyState> states = readStrategyStates(c, node.path("uid").asText());
-						r.add(PortfolioDocuments.splice(node, states, mapper, corruptModelStates));
+					for (StoredDocument stored : readStoredDocuments(c)) {
+						// A document that cannot load is skipped rather than allowed to
+						// throw inside updateFromJson and stop every portfolio loading.
+						// A SQL failure still fails the whole load: that is the database.
+						String skipped = null;
+						try {
+							JsonNode node = mapper.readTree(stored.document);
+							if (!node.isObject()) {
+								skipped = "the stored document is not a JSON object";
+							} else {
+								Map<String, StrategyState> states = readStrategyStates(c, stored.uid);
+								ObjectNode spliced = PortfolioDocuments.splice(node, states, mapper, corruptModelStates);
+								PortfolioDocumentValidator.validate(spliced);
+								r.add(spliced);
+							}
+						} catch (IOException e) {
+							skipped = "the stored document is not valid JSON: " + e.getMessage();
+						} catch (PortfolioDocumentValidator.InvalidDocumentException e) {
+							skipped = e.getMessage();
+						}
+						if (skipped != null) {
+							skippedPortfolios.add(String.format("\"%s\" (%s): %s", stored.name, stored.uid, skipped));
+						}
 					}
 					return r;
 				}
 			});
 			reportCorruptModelStates(corruptModelStates);
+			reportSkippedPortfolios(skippedPortfolios);
 			portfolioList.updateFromJson(root);
 			portfolioList.initialize();
 			status.setStoreReady(true);
@@ -529,6 +566,27 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		String message = sb.toString();
 		logger.error(message);
 		bus.post(new LogEvent(message));
+	}
+
+	/**
+	 * A skipped portfolio is neither shown nor traded, so it must be impossible to
+	 * miss. At startup nothing is subscribed to the bus yet, so the warning is also
+	 * left on Status for Application.open() to show.
+	 */
+	private void reportSkippedPortfolios(List<String> skipped) {
+		if (skipped.isEmpty()) {
+			status.setLoadWarning("");
+			return;
+		}
+		for (String s : skipped) {
+			logger.error("stored portfolio skipped, it could not be loaded: " + s);
+			bus.post(new LogEvent("stored portfolio skipped, it could not be loaded: " + s));
+		}
+		String warning = String.format("%d stored portfolio(s) could not be loaded and were skipped. "
+				+ "They remain in the database but are not shown or traded until fixed:%n%s",
+				skipped.size(), String.join("\n", skipped));
+		status.setLoadWarning(warning);
+		bus.post(new StoreProblem("load", StoreError.INVALID_STORED_PORTFOLIO, warning));
 	}
 
 	/**

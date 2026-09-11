@@ -137,6 +137,47 @@ public class PortfolioImporterTest {
 		}
 	}
 
+	private String rejectionMessage(String document) throws Exception {
+		try {
+			PortfolioImporter.parse(document, mapper);
+		} catch (PortfolioImporter.InvalidImportException e) {
+			return e.getMessage();
+		}
+		fail("expected InvalidImportException");
+		return null;
+	}
+
+	/**
+	 * updateFromJson resolves ratio_ma_type with MAType.values()[n.asInt()], so an
+	 * out-of-range value used to be accepted here and then throw on every later
+	 * startup, leaving the whole database unloadable.
+	 */
+	@Test
+	public void testRejectsRatioMaTypeOutsideTheKnownRange() throws Exception {
+		String high = rejectionMessage(PORTFOLIO.replace("\"ratio_ma_type\":1", "\"ratio_ma_type\":999"));
+		assertTrue(high, high.contains("ratio_ma_type") && high.contains("NYSE:V"));
+		String negative = rejectionMessage(PORTFOLIO.replace("\"ratio_ma_type\":1", "\"ratio_ma_type\":-1"));
+		assertTrue(negative, negative.contains("ratio_ma_type"));
+	}
+
+	/** An unknown zone id makes DateTimeZone.forID throw when the portfolio loads. */
+	@Test
+	public void testRejectsUnknownTimezone() throws Exception {
+		String message = rejectionMessage(PORTFOLIO.replace("\"timezone\":\"America/New_York\"",
+				"\"timezone\":\"Not/AZone\""));
+		assertTrue(message, message.contains("Not/AZone") && message.contains("NYSE:V"));
+	}
+
+	/**
+	 * A string where a number belongs does not throw - asDouble() quietly turns it
+	 * into 0.0 - so it would import as a strategy with an entry threshold of zero.
+	 */
+	@Test
+	public void testRejectsNonNumericValueInNumericField() throws Exception {
+		String message = rejectionMessage(PORTFOLIO.replace("\"entry_threshold\":2.0", "\"entry_threshold\":\"abc\""));
+		assertTrue(message, message.contains("entry_threshold") && message.contains("NYSE:V"));
+	}
+
 	@Test
 	public void testRejectsMissingPortfolioField() throws Exception {
 		String broken = PORTFOLIO.replace("\"max_pairs_open\":10,", "");

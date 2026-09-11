@@ -26,6 +26,7 @@ public class Status extends AbstractModelObject {
 	private volatile boolean ibConnecting = false;
 	private volatile boolean ibConnectingOrConnected = false;
 	private volatile boolean storeReady=false;
+	private volatile String loadWarning="";
 
 	public boolean isIbConnected() {
 		return ibConnected;
@@ -46,6 +47,17 @@ public class Status extends AbstractModelObject {
 		boolean oldval=this.storeReady;
 		this.storeReady = storeReady;
 		firePropertyChange("storeReady", oldval, this.storeReady);
+	}
+
+	/** Non-empty when load() had to skip stored portfolios it could not load. */
+	public String getLoadWarning() {
+		return loadWarning;
+	}
+
+	public void setLoadWarning(String loadWarning) {
+		String oldval=this.loadWarning;
+		this.loadWarning = loadWarning == null ? "" : loadWarning;
+		firePropertyChange("loadWarning", oldval, this.loadWarning);
 	}
 
 	public boolean isIbConnecting() {

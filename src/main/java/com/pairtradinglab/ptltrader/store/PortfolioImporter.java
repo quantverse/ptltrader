@@ -169,6 +169,15 @@ public class PortfolioImporter {
 				s.remove(f);
 			}
 		}
+		// Presence, model and symbols are checked above with import-specific messages;
+		// this refuses anything that would still break the next load - an out-of-range
+		// ratio_ma_type or unknown timezone throws inside updateFromJson on every
+		// startup, and a non-numeric value silently becomes zero.
+		try {
+			PortfolioDocumentValidator.validate(p);
+		} catch (PortfolioDocumentValidator.InvalidDocumentException e) {
+			throw new InvalidImportException(e.getMessage());
+		}
 		return p;
 	}
 

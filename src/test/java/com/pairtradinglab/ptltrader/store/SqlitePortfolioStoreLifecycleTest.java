@@ -348,4 +348,46 @@ public class SqlitePortfolioStoreLifecycleTest {
 			reopened.stop();
 		}
 	}
+
+	/**
+	 * One stored portfolio that cannot be loaded must not take the others down with
+	 * it. load() used to feed every document to updateFromJson in a single pass, so a
+	 * single bad row threw, left storeReady false, and no portfolio loaded at all.
+	 * The skipped one must also be made visible, since it is neither shown nor traded.
+	 */
+	@Test
+	public void testOneUnloadableStoredPortfolioDoesNotHideTheOthers() throws Exception {
+		String good = PORTFOLIO_JSON.replace("\"uid\":\"P1\"", "\"uid\":\"PG\"")
+				.replace("\"name\":\"My Portfolio\"", "\"name\":\"B good\"");
+		// insertPortfolioDocuments() does not validate - only the importer does - so a
+		// document that cannot load can still reach the database, as an externally
+		// edited or older one could.
+		String bad = PORTFOLIO_JSON.replace("\"uid\":\"P1\"", "\"uid\":\"PB\"")
+				.replace("\"name\":\"My Portfolio\"", "\"name\":\"A bad\"")
+				.replace("\"uid\":\"S1\"", "\"uid\":\"S2\"")
+				.replace("\"ratio_ma_type\":1", "\"ratio_ma_type\":999");
+
+		EventBus bus = new EventBus("lifecycletest");
+		SqlitePortfolioStore store = newStore(bus, newPortfolioList(bus), new Status());
+		store.start();
+		List<com.fasterxml.jackson.databind.JsonNode> docs = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+		docs.add(mapper.readTree(good));
+		docs.add(mapper.readTree(bad));
+		store.insertPortfolioDocuments(docs);
+		store.stop();
+
+		PortfolioList second = newPortfolioList(bus);
+		Status status = new Status();
+		SqlitePortfolioStore reopened = newStore(bus, second, status);
+		reopened.start();
+		try {
+			assertTrue("the readable database must still count as ready", status.isStoreReady());
+			assertEquals("the good portfolio must still load", 1, second.getPortfolios().size());
+			assertEquals("B good", second.getPortfolios().get(0).getName());
+			assertTrue("the skipped portfolio must be surfaced: " + status.getLoadWarning(),
+					status.getLoadWarning().contains("A bad"));
+		} finally {
+			reopened.stop();
+		}
+	}
 }
