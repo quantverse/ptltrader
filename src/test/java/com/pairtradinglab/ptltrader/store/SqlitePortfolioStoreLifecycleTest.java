@@ -156,7 +156,7 @@ public class SqlitePortfolioStoreLifecycleTest {
 
 		// Insert a portfolio the way the New Portfolio / import flows do, then reload
 		// it through the real load() path so the store owns a live bean to save state for.
-		store.insertPortfolioDocument(mapper.readTree(PORTFOLIO_JSON));
+		store.insertPortfolioDocuments(Collections.singletonList(mapper.readTree(PORTFOLIO_JSON)));
 		store.flush();
 		store.load();
 		assertEquals(1, first.getPortfolios().size());
@@ -233,7 +233,7 @@ public class SqlitePortfolioStoreLifecycleTest {
 		PortfolioList first = newPortfolioList(bus);
 		SqlitePortfolioStore store = newStore(bus, first, new Status());
 		store.start();
-		store.insertPortfolioDocument(mapper.readTree(PORTFOLIO_JSON));
+		store.insertPortfolioDocuments(Collections.singletonList(mapper.readTree(PORTFOLIO_JSON)));
 		store.flush();
 		store.load();
 		Portfolio p = first.getPortfolios().get(0);
@@ -263,5 +263,35 @@ public class SqlitePortfolioStoreLifecycleTest {
 
 		assertEquals("no StoreProblem may be posted by this sequence: " + problems,
 				0, problems.size());
+	}
+
+	/**
+	 * An import is all or nothing. If any document in it fails to write, none of it
+	 * may be committed and the caller must be told - previously each document was
+	 * queued separately and a later failure left the earlier ones saved while the
+	 * UI reported the import as complete.
+	 */
+	@Test
+	public void testInsertPortfolioDocumentsIsAllOrNothing() throws Exception {
+		EventBus bus = new EventBus("lifecycletest");
+		PortfolioList list = newPortfolioList(bus);
+		SqlitePortfolioStore store = newStore(bus, list, new Status());
+		store.start();
+		try {
+			// A null second document makes the write fail after the first was upserted.
+			List<com.fasterxml.jackson.databind.JsonNode> docs = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+			docs.add(mapper.readTree(PORTFOLIO_JSON));
+			docs.add(null);
+			try {
+				store.insertPortfolioDocuments(docs);
+				fail("expected StoreException when part of the import fails");
+			} catch (StoreException expected) {
+				// reported to the caller
+			}
+			assertTrue("load() must succeed on a readable database", store.load());
+			assertTrue("a failed import must leave nothing behind", list.getPortfolios().isEmpty());
+		} finally {
+			store.stop();
+		}
 	}
 }

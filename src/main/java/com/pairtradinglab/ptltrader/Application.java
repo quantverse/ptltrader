@@ -112,6 +112,7 @@ import com.pairtradinglab.ptltrader.events.LogEvent;
 import com.pairtradinglab.ptltrader.store.PortfolioDocuments;
 import com.pairtradinglab.ptltrader.store.PortfolioImporter;
 import com.pairtradinglab.ptltrader.store.PortfolioStore;
+import com.pairtradinglab.ptltrader.store.StoreException;
 import com.pairtradinglab.ptltrader.store.SqlitePortfolioStore;
 import com.pairtradinglab.ptltrader.events.StoreProblem;
 import com.pairtradinglab.ptltrader.ib.SimpleWrapper;
@@ -1788,13 +1789,13 @@ public class Application {
 			int pairs = 0;
 			for (ObjectNode doc : docs) {
 				pairs += doc.get("strategies").size();
-				portfolioStore.insertPortfolioDocument(doc);
 			}
-			// insertPortfolioDocument() does not flush or reload on its own (so a
-			// multi-portfolio import doesn't trigger a reload per document); do it
-			// once here so the new portfolio(s) show up in the UI.
-			portfolioStore.flush();
-			portfolioStore.load();
+			// Committed as one transaction before anything is reported; a failure
+			// throws StoreException and nothing is saved.
+			portfolioStore.insertPortfolioDocuments(docs);
+			// The import is saved. If refreshing the list fails, load() has already
+			// reported it, so do not also claim the import completed.
+			if (!portfolioStore.load()) return;
 			bus.post(new LogEvent(String.format("imported %d portfolio(s), %d pair(s)", docs.size(), pairs)));
 			MessageDialog.openInformation(shlPtlTrader, "Import Complete",
 					String.format("Imported %d portfolio(s) containing %d pair(s).", docs.size(), pairs));
@@ -1802,6 +1803,8 @@ public class Application {
 			MessageDialog.openError(shlPtlTrader, "Import Failed", e.getMessage());
 		} catch (IOException e) {
 			MessageDialog.openError(shlPtlTrader, "Import Failed", "Unable to read the file: " + e.getMessage());
+		} catch (StoreException e) {
+			MessageDialog.openError(shlPtlTrader, "Import Failed", e.getMessage());
 		}
 	}
 
@@ -1846,11 +1849,14 @@ public class Application {
 		doc.put("master_status", Portfolio.MASTER_STATUS_ACTIVE);
 		doc.put("pdt_rules", Portfolio.PDT_ENABLE_25K);
 		doc.putArray("strategies");
-		portfolioStore.insertPortfolioDocument(doc);
-		// Same reason as importPortfolio(): insertPortfolioDocument() no longer
-		// flushes or reloads by itself.
-		portfolioStore.flush();
-		portfolioStore.load();
+		try {
+			portfolioStore.insertPortfolioDocuments(Collections.singletonList(doc));
+		} catch (StoreException e) {
+			MessageDialog.openError(shlPtlTrader, "New Portfolio Failed", e.getMessage());
+			return;
+		}
+		// Saved. A failed refresh has already been reported by load().
+		if (!portfolioStore.load()) return;
 		bus.post(new LogEvent("created portfolio " + name));
 	}
 

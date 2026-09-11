@@ -231,6 +231,28 @@ public class SqlitePortfolioStoreTest {
 				containsIoFailure(flushCaptor.getAllValues()));
 	}
 
+	/**
+	 * Import and New Portfolio used to fire-and-forget their insert and then report
+	 * success. With the db-worker not running (start() bailed after a failed open),
+	 * nothing was saved while the user was told it had been.
+	 */
+	@Test
+	public void testInsertPortfolioDocumentsFailsWhenWorkerNotRunning() throws Exception {
+		SqlitePortfolioStore store = newUnstartedStore(mock(EventBus.class), mock(PortfolioList.class));
+		try {
+			store.insertPortfolioDocuments(Collections.singletonList(mapper.readTree(PORTFOLIO_JSON)));
+			fail("expected StoreException when nothing can be written");
+		} catch (StoreException expected) {
+			// the caller must be told the portfolio was not saved
+		}
+	}
+
+	@Test
+	public void testLoadReportsFailureWhenDatabaseNeverOpened() throws Exception {
+		SqlitePortfolioStore store = newUnstartedStore(mock(EventBus.class), mock(PortfolioList.class));
+		assertFalse("load() must not report success when nothing could be read", store.load());
+	}
+
 	@Test
 	public void testBindPortfolioToAccountRejectsEmptyOrNullCode() throws Exception {
 		EventBus bus = mock(EventBus.class);

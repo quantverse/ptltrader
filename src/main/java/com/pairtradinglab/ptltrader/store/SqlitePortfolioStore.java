@@ -214,8 +214,8 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		void run(Connection c) throws SQLException;
 	}
 
-	/** A unit of work run on db-worker that produces a result for the caller. */
-	private interface ReadTask<T> {
+	/** A unit of work run on db-worker whose result, or failure, the caller waits for. */
+	private interface WorkerTask<T> {
 		T run(Connection c) throws Exception;
 	}
 
@@ -224,7 +224,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	 * that every use of the Connection made by load() stays confined to
 	 * db-worker exactly like the writes are, instead of racing them.
 	 */
-	private <T> T runOnWorker(final ReadTask<T> task) throws Exception {
+	private <T> T runOnWorker(final WorkerTask<T> task) throws Exception {
 		if (!writeQueueWorker.isAlive()) {
 			throw new IllegalStateException("db-worker is not running");
 		}
@@ -479,13 +479,13 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	}
 
 	@Override
-	public void load() {
-		if (database == null) return;
+	public boolean load() {
+		if (database == null) return false;
 		// Written on db-worker, read here after the latch in runOnWorker(), which
 		// establishes the happens-before edge.
 		final List<String> corruptModelStates = new ArrayList<String>();
 		try {
-			ArrayNode root = runOnWorker(new ReadTask<ArrayNode>() {
+			ArrayNode root = runOnWorker(new WorkerTask<ArrayNode>() {
 				@Override
 				public ArrayNode run(Connection c) throws Exception {
 					List<String> documents = readDocuments(c);
@@ -503,10 +503,12 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			portfolioList.initialize();
 			status.setStoreReady(true);
 			logger.info("loaded " + root.size() + " portfolios from the database");
+			return true;
 		} catch (Exception e) {
 			logger.error("unable to load portfolios", e);
 			bus.post(new LogEvent("unable to load portfolios: " + e.getMessage()));
 			bus.post(new StoreProblem("load", StoreError.IO_FAILURE, e.getMessage()));
+			return false;
 		}
 	}
 
@@ -548,7 +550,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	private void loadHistories() {
 		if (database == null) return;
 		try {
-			List<TradeHistoryEntry> trades = runOnWorker(new ReadTask<List<TradeHistoryEntry>>() {
+			List<TradeHistoryEntry> trades = runOnWorker(new WorkerTask<List<TradeHistoryEntry>>() {
 				@Override
 				public List<TradeHistoryEntry> run(Connection c) throws Exception {
 					return readTradeHistory(c, HISTORY_LOAD_LIMIT);
@@ -557,7 +559,7 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 			for (TradeHistoryEntry e : trades) {
 				tradeHistory.addEntryLast(e);
 			}
-			List<LegHistoryEntry> legs = runOnWorker(new ReadTask<List<LegHistoryEntry>>() {
+			List<LegHistoryEntry> legs = runOnWorker(new WorkerTask<List<LegHistoryEntry>>() {
 				@Override
 				public List<LegHistoryEntry> run(Connection c) throws Exception {
 					return readLegHistory(c, HISTORY_LOAD_LIMIT);
@@ -649,15 +651,35 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 	}
 
 	@Override
-	public void insertPortfolioDocument(final JsonNode document) {
-		final String uid = document.path("uid").asText();
-		final String name = document.path("name").asText();
-		enqueue(new SqlTask() {
-			@Override
-			public void run(Connection c) throws SQLException {
-				upsertDocument(c, uid, name, document.toString());
-			}
-		});
+	public void insertPortfolioDocuments(final List<? extends JsonNode> documents) throws StoreException {
+		try {
+			// Synchronous, and one transaction: the caller only reports success once
+			// every document is committed, and a failure part-way leaves nothing behind.
+			runOnWorker(new WorkerTask<Void>() {
+				@Override
+				public Void run(Connection c) throws Exception {
+					c.setAutoCommit(false);
+					try {
+						for (JsonNode document : documents) {
+							upsertDocument(c, document.path("uid").asText(), document.path("name").asText(),
+									document.toString());
+						}
+						c.commit();
+					} catch (Exception e) {
+						c.rollback();
+						throw e;
+					} finally {
+						c.setAutoCommit(true);
+					}
+					return null;
+				}
+			});
+		} catch (Exception e) {
+			logger.error("unable to insert portfolio documents", e);
+			bus.post(new LogEvent("unable to save portfolio(s): " + e.getMessage()));
+			throw new StoreException("The portfolio could not be saved to the local database: "
+					+ e.getMessage(), e);
+		}
 	}
 
 	@Override

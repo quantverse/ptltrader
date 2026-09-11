@@ -18,6 +18,8 @@
  */
 package com.pairtradinglab.ptltrader.store;
 
+import java.util.List;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.pairtradinglab.ptltrader.model.PairStrategy;
 import com.pairtradinglab.ptltrader.model.Portfolio;
@@ -28,8 +30,13 @@ import com.pairtradinglab.ptltrader.model.Portfolio;
  */
 public interface PortfolioStore {
 
-	/** Loads every portfolio into the PortfolioList and initializes it. */
-	void load();
+	/**
+	 * Loads every portfolio into the PortfolioList and initializes it.
+	 *
+	 * @return false if the database could not be read; the failure has already been
+	 *         logged and reported through StoreProblem("load")
+	 */
+	boolean load();
 
 	/** Queues a configuration save for one portfolio and its strategies. */
 	void savePortfolio(Portfolio p);
@@ -44,11 +51,12 @@ public interface PortfolioStore {
 	void deletePortfolio(Portfolio p);
 
 	/**
-	 * Queues an upsert of a validated, freshly re-uid'd portfolio document. Does
-	 * not reload the PortfolioList; the caller must call flush() and then load()
-	 * once it has finished inserting so the new portfolio(s) appear in the UI.
+	 * Inserts validated, freshly re-uid'd portfolio documents in one transaction and
+	 * returns only once they are committed. All or nothing: if any document fails to
+	 * write, none is saved and StoreException is thrown. Does not reload the
+	 * PortfolioList; call load() afterwards so the new portfolio(s) appear.
 	 */
-	void insertPortfolioDocument(JsonNode document);
+	void insertPortfolioDocuments(List<? extends JsonNode> documents) throws StoreException;
 
 	/**
 	 * Binds a portfolio to an IB account, enforcing that no other portfolio holds
