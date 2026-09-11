@@ -77,8 +77,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.databinding.UpdateValueStrategy;
@@ -290,7 +291,10 @@ public class Application {
 	private Button btnPairOpenShort;
 
 
-	private static final ExecutorService busExecutor = Executors.newFixedThreadPool(5, new ThreadFactoryBuilder().setNameFormat("bus-master-%d").build());
+	// A ThreadPoolExecutor rather than an ExecutorService so shutdown can wait for it to
+	// go idle; equivalent to Executors.newFixedThreadPool(5, ...).
+	private static final ThreadPoolExecutor busExecutor = new ThreadPoolExecutor(5, 5, 0L, TimeUnit.MILLISECONDS,
+			new LinkedBlockingQueue<Runnable>(), new ThreadFactoryBuilder().setNameFormat("bus-master-%d").build());
 	private Table tableLegHistory;
 	private TableViewer tableViewerLegHistory;
 	private Table tableAccounts;
@@ -382,6 +386,9 @@ public class Application {
 						Thread.sleep(1000);
 					}
 					
+					ShutdownSequence.beforeContainerStop(busExecutor, pl,
+							(PortfolioStore) pico.getComponent(PortfolioStore.class), l);
+
 					l.debug("shutting down executors");
 					pico.stop();
 					busExecutor.shutdownNow();

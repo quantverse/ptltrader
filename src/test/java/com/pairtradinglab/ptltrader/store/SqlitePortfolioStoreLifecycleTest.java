@@ -26,6 +26,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CountDownLatch;
 
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
@@ -39,6 +44,7 @@ import com.google.common.eventbus.AsyncEventBus;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.pairtradinglab.ptltrader.DataDirectory;
+import com.pairtradinglab.ptltrader.ShutdownSequence;
 import com.pairtradinglab.ptltrader.LoggerFactory;
 import com.pairtradinglab.ptltrader.RuntimeParams;
 import com.pairtradinglab.ptltrader.events.BeaconFlash;
@@ -55,6 +61,7 @@ import com.pairtradinglab.ptltrader.model.Status;
 import com.pairtradinglab.ptltrader.model.TradeHistory;
 import com.pairtradinglab.ptltrader.trading.PairTradingCoreFactory;
 import com.pairtradinglab.ptltrader.trading.PairTradingModelKalmanAutoState;
+import com.pairtradinglab.ptltrader.trading.events.HistoryEntry;
 import com.pairtradinglab.ptltrader.trading.events.PairStateUpdated;
 
 /**
@@ -124,10 +131,15 @@ public class SqlitePortfolioStoreLifecycleTest {
 	}
 
 	private SqlitePortfolioStore newStore(EventBus bus, PortfolioList portfolioList, Status status) {
+		return newStore(bus, portfolioList, status, new TradeHistory());
+	}
+
+	private SqlitePortfolioStore newStore(EventBus bus, PortfolioList portfolioList, Status status,
+			TradeHistory tradeHistory) {
 		LoggerFactory lf = mock(LoggerFactory.class);
 		when(lf.createLogger(anyString())).thenReturn(mock(Logger.class));
 		return new SqlitePortfolioStore(bus, lf, new RuntimeParams(new String[] { PROFILE }),
-				portfolioList, status, new LegHistory(), new TradeHistory());
+				portfolioList, status, new LegHistory(), tradeHistory);
 	}
 
 	private PortfolioList newPortfolioList(EventBus bus) {
@@ -386,6 +398,132 @@ public class SqlitePortfolioStoreLifecycleTest {
 			assertEquals("B good", second.getPortfolios().get(0).getName());
 			assertTrue("the skipped portfolio must be surfaced: " + status.getLoadWarning(),
 					status.getLoadWarning().contains("A bad"));
+		} finally {
+			reopened.stop();
+		}
+	}
+
+	private static ThreadPoolExecutor singleThreadBusExecutor() {
+		return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>());
+	}
+
+	/**
+	 * A HistoryEntry or PairStateUpdated posted by a core just before it exited can
+	 * still be queued in the async bus's executor when shutdown begins. The store used
+	 * to stop without waiting for it, so the delivery later found db-worker gone - or
+	 * busExecutor.shutdownNow() discarded it - and the write was lost.
+	 */
+	@Test
+	public void testShutdownWaitsForBusDeliveriesAlreadyInFlight() throws Exception {
+		ThreadPoolExecutor busExecutor = singleThreadBusExecutor();
+		try {
+			EventBus bus = new AsyncEventBus(busExecutor);
+			PortfolioList list = newPortfolioList(bus);
+			SqlitePortfolioStore store = newStore(bus, list, new Status());
+			store.start();
+
+			// Occupy the only bus thread so the HistoryEntry's delivery is still queued
+			// when the shutdown sequence starts, and free it from elsewhere shortly after.
+			final CountDownLatch release = new CountDownLatch(1);
+			busExecutor.execute(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						release.await();
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			});
+			bus.post(new HistoryEntry("S1", "DU1", new DateTime(DateTimeZone.UTC), "NYSE:V", "NYSE:MA",
+					HistoryEntry.ACTION_CLOSED, 1, 1, 1, 1, "late"));
+			Thread releaser = new Thread(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						Thread.sleep(500);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+					release.countDown();
+				}
+			});
+			releaser.start();
+
+			ShutdownSequence.beforeContainerStop(busExecutor, list, store, mock(Logger.class));
+			store.stop();
+			releaser.join();
+
+			TradeHistory history = new TradeHistory();
+			EventBus quiet = new EventBus("lifecycletest");
+			SqlitePortfolioStore reopened = newStore(quiet, newPortfolioList(quiet), new Status(), history);
+			reopened.start();
+			try {
+				assertEquals("a history entry posted before shutdown must be saved", 1, history.getEntries().size());
+			} finally {
+				reopened.stop();
+			}
+		} finally {
+			busExecutor.shutdownNow();
+		}
+	}
+
+	/**
+	 * Portfolio and strategy edits are synced out only on the once-a-minute beacon, so
+	 * an edit made in the last minute before exit never reached the store.
+	 */
+	@Test
+	public void testShutdownSavesPortfolioEditNotYetSyncedOut() throws Exception {
+		Portfolio reloaded = reloadedAfterShutdown(new Consumer<Portfolio>() {
+			@Override
+			public void accept(Portfolio p) {
+				p.setName("edited just before exit");
+			}
+		});
+		assertEquals("a portfolio edit made just before exit must be saved",
+				"edited just before exit", reloaded.getName());
+	}
+
+	@Test
+	public void testShutdownSavesStrategyEditNotYetSyncedOut() throws Exception {
+		Portfolio reloaded = reloadedAfterShutdown(new Consumer<Portfolio>() {
+			@Override
+			public void accept(Portfolio p) {
+				p.getPairStrategies().get(0).setMaxDays(33);
+			}
+		});
+		assertEquals("a strategy edit made just before exit must be saved",
+				33, reloaded.getPairStrategies().get(0).getMaxDays());
+	}
+
+	/**
+	 * Loads the fixture portfolio, applies an edit that is not synced out, runs the
+	 * shutdown sequence and stops the store, then returns the portfolio as a fresh
+	 * store loads it. The edit is passed as an anonymous class rather than a nested
+	 * interface, for the same test-discovery reason as collectStoreProblems().
+	 */
+	private Portfolio reloadedAfterShutdown(Consumer<Portfolio> edit) throws Exception {
+		EventBus bus = new EventBus("lifecycletest");
+		PortfolioList first = newPortfolioList(bus);
+		SqlitePortfolioStore store = newStore(bus, first, new Status());
+		store.start();
+		store.insertPortfolioDocuments(Collections.singletonList(mapper.readTree(PORTFOLIO_JSON)));
+		assertTrue(store.load());
+		edit.accept(first.getPortfolios().get(0));
+
+		ThreadPoolExecutor idle = singleThreadBusExecutor();
+		try {
+			ShutdownSequence.beforeContainerStop(idle, first, store, mock(Logger.class));
+		} finally {
+			idle.shutdownNow();
+		}
+		store.stop();
+
+		PortfolioList second = newPortfolioList(bus);
+		SqlitePortfolioStore reopened = newStore(bus, second, new Status());
+		reopened.start();
+		try {
+			return second.getPortfolios().get(0);
 		} finally {
 			reopened.stop();
 		}
