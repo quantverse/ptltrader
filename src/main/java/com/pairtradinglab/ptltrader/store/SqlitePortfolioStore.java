@@ -584,6 +584,14 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		enqueue(new SqlTask() {
 			@Override
 			public void run(Connection c) throws SQLException {
+				// The bus is asynchronous: a sync-out dispatched before deletePortfolio()
+				// detached the portfolio can still be delivered after the delete, and an
+				// upsert here would re-insert the deleted row. Checked on db-worker for
+				// the same ordering reason as in saveStrategyState().
+				if (deletedPortfolioUids.contains(uid)) {
+					logger.debug("dropping late configuration save for deleted portfolio " + uid);
+					return;
+				}
 				upsertDocument(c, uid, name, doc.toString());
 			}
 		});
@@ -638,7 +646,9 @@ public class SqlitePortfolioStore implements PortfolioStore, Startable {
 		// its pairs. Done here rather than in the menu action so every caller of
 		// deletePortfolio() gets it.
 		p.prepareToDelete();
-		// Recorded before the delete is queued; see saveStrategyState().
+		// Recorded before the delete is queued, so that a late savePortfolio() or
+		// saveStrategyState() for this portfolio - still in flight on the async bus -
+		// is dropped on db-worker instead of undoing the delete.
 		deletedPortfolioUids.add(uid);
 		enqueue(new SqlTask() {
 			@Override

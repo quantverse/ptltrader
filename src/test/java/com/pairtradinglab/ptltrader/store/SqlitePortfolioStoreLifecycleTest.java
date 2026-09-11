@@ -25,6 +25,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 import org.apache.log4j.Logger;
 import org.joda.time.DateTime;
@@ -34,12 +35,15 @@ import org.junit.Before;
 import org.junit.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.eventbus.AsyncEventBus;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.pairtradinglab.ptltrader.DataDirectory;
 import com.pairtradinglab.ptltrader.LoggerFactory;
 import com.pairtradinglab.ptltrader.RuntimeParams;
 import com.pairtradinglab.ptltrader.events.BeaconFlash;
+import com.pairtradinglab.ptltrader.events.PortfolioSyncOutRequest;
+import com.pairtradinglab.ptltrader.events.StrategySyncOutRequest;
 import com.pairtradinglab.ptltrader.events.StoreProblem;
 import com.pairtradinglab.ptltrader.model.LegHistory;
 import com.pairtradinglab.ptltrader.model.PairStrategy;
@@ -292,6 +296,56 @@ public class SqlitePortfolioStoreLifecycleTest {
 			assertTrue("a failed import must leave nothing behind", list.getPortfolios().isEmpty());
 		} finally {
 			store.stop();
+		}
+	}
+
+	/**
+	 * Production uses an AsyncEventBus, so a sync-out posted before the portfolio was
+	 * deleted can be delivered after it. Detaching the portfolio from the bus stops it
+	 * posting new ones, but cannot recall one already dispatched, and savePortfolio()
+	 * then re-inserted the deleted row. The executor here holds every delivery so the
+	 * late one can be released deterministically after the delete.
+	 */
+	@Test
+	public void testSyncOutDeliveredAfterDeleteDoesNotResurrectPortfolio() throws Exception {
+		final List<Runnable> held = Collections.synchronizedList(new ArrayList<Runnable>());
+		EventBus bus = new AsyncEventBus(new Executor() {
+			@Override
+			public void execute(Runnable command) {
+				held.add(command);
+			}
+		});
+		PortfolioList first = newPortfolioList(bus);
+		SqlitePortfolioStore store = newStore(bus, first, new Status());
+		store.start();
+		store.insertPortfolioDocuments(Collections.singletonList(mapper.readTree(PORTFOLIO_JSON)));
+		assertTrue(store.load());
+		Portfolio p = first.getPortfolios().get(0);
+
+		// Both sync-out kinds end in savePortfolio(); both are already on the bus.
+		bus.post(new PortfolioSyncOutRequest(p));
+		bus.post(new StrategySyncOutRequest(p.getPairStrategies().get(0)));
+		assertFalse("the sync-outs must be pending, not delivered yet", held.isEmpty());
+
+		store.deletePortfolio(p);
+		store.flush();
+
+		List<Runnable> late;
+		synchronized (held) {
+			late = new ArrayList<Runnable>(held);
+			held.clear();
+		}
+		for (Runnable r : late) r.run();
+		store.stop();
+
+		PortfolioList second = newPortfolioList(new EventBus("lifecycletest"));
+		SqlitePortfolioStore reopened = newStore(new EventBus("lifecycletest"), second, new Status());
+		reopened.start();
+		try {
+			assertTrue("a sync-out delivered after the delete must not bring the portfolio back",
+					second.getPortfolios().isEmpty());
+		} finally {
+			reopened.stop();
 		}
 	}
 }
