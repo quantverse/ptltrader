@@ -29,6 +29,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.pairtradinglab.ptltrader.model.PairStrategy;
 import com.pairtradinglab.ptltrader.model.Portfolio;
+import com.pairtradinglab.ptltrader.trading.AbstractPairTradingModelState;
 
 /**
  * Converts between the observable model beans and the stored JSON document.
@@ -110,8 +111,14 @@ public class PortfolioDocuments {
 			} else {
 				try {
 					// Stored as JSON text; updateFromJson expects a nested object.
-					s.set("last_model_state", mapper.readTree(st.lastModelState));
-				} catch (IOException e) {
+					JsonNode state = mapper.readTree(st.lastModelState);
+					// Parsing is not enough: valid JSON naming an unknown @class, or
+					// lacking what the state class needs, would only fail later inside
+					// PairStrategy.updateFromJson(), which swallows it and resumes with
+					// no state. Deserialize here so that case is reported too.
+					mapper.treeToValue(state, AbstractPairTradingModelState.class);
+					s.set("last_model_state", state);
+				} catch (IOException | RuntimeException e) {
 					// A corrupt state blob must not prevent the portfolio loading.
 					// The strategy resumes as if it had no stored state - but it must
 					// not do so silently, so the caller is told which strategy it was.

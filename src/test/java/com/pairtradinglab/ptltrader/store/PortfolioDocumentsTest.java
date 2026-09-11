@@ -124,7 +124,7 @@ public class PortfolioDocumentsTest {
 		ObjectNode doc = PortfolioDocuments.build(portfolio, mapper);
 		Map<String, StrategyState> states = new HashMap<String, StrategyState>();
 		states.put("S1", new StrategyState("S1", "2026-03-01 14:30:00", Double.valueOf(12345.75),
-				"{\"@class\":\".PairTradingModelKalmanAutoState\",\"ve\":0.001}"));
+				"{\"@class\":\".PairTradingModelKalmanAutoState\",\"subModelId\":7}"));
 
 		JsonNode s = PortfolioDocuments.splice(doc, states, mapper).get("strategies").get(0);
 		assertEquals("2026-03-01 14:30:00", s.get("last_opened_datetime").asText());
@@ -159,6 +159,25 @@ public class PortfolioDocumentsTest {
 				s.get("last_model_state").isNull());
 		// ...but discarding it must not be silent: losing a model state is the one
 		// persistence failure with a monetary cost.
+		assertEquals("the affected strategy must be reported", Arrays.asList("S1"), corrupt);
+	}
+
+	/**
+	 * Well-formed JSON is not enough. A blob naming a state class this build does not
+	 * have fails later, inside PairStrategy.updateFromJson(), which only prints a
+	 * stack trace and resumes the strategy with no state - so splice() must treat it
+	 * as corrupt and report it, exactly like unparseable JSON.
+	 */
+	@Test
+	public void testModelStateNamingAnUnknownClassIsReportedAsCorrupt() throws Exception {
+		ObjectNode doc = PortfolioDocuments.build(portfolio, mapper);
+		Map<String, StrategyState> states = new HashMap<String, StrategyState>();
+		states.put("S1", new StrategyState("S1", null, null, "{\"@class\":\".NoSuchState\"}"));
+
+		List<String> corrupt = new ArrayList<String>();
+		JsonNode s = PortfolioDocuments.splice(doc, states, mapper, corrupt)
+				.get("strategies").get(0);
+		assertTrue("an unusable state must splice as null", s.get("last_model_state").isNull());
 		assertEquals("the affected strategy must be reported", Arrays.asList("S1"), corrupt);
 	}
 
