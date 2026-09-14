@@ -30,7 +30,7 @@ For the design rationale — layering, threading model, event flows — see
 | Single-instance lock | `junique` 1.0.4 |
 | Tests | JUnit 4.12 + Mockito 2.2.9 |
 
-Current version: **1.7.0** (`gradle.properties`, mirrored in
+Current version: **2.0.0** (`gradle.properties`, mirrored in
 `com.pairtradinglab.ptltrader.Version` — keep the two in sync when releasing; the
 value is shown in the About box).
 
@@ -122,12 +122,12 @@ manual bindings that WindowBuilder cannot round-trip live in `finishBindings()`.
 # Linux / Windows
 java --add-opens java.base/java.net=ALL-UNNAMED \
      --add-opens=java.base/sun.security.util=ALL-UNNAMED \
-     -jar ptltrader-1.7.0-linux64.jar
+     -jar ptltrader-2.0.0-linux64.jar
 
 # macOS additionally requires the SWT main-thread flag
 java --add-opens java.base/java.net=ALL-UNNAMED \
      --add-opens=java.base/sun.security.util=ALL-UNNAMED \
-     -XstartOnFirstThread -jar ptltrader-1.7.0-macosx.jar
+     -XstartOnFirstThread -jar ptltrader-2.0.0-macosx.jar
 ```
 
 The `--add-opens` flags are required by the networking/TLS stack on Java 11+.

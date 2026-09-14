@@ -2,7 +2,7 @@
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
 
   <Product Name='PTLTrader' Id='66441f40-6e10-42c4-9c3a-96af2c37e228' UpgradeCode='cff2d2fd-c294-40ff-b90d-295a342b2dcc'
-    Language='1033' Codepage='1252' Version='1.7.0' Manufacturer='Quantverse OU'>
+    Language='1033' Codepage='1252' Version='2.0.0' Manufacturer='Quantverse OU'>
 
         <Package Id='*' Keywords='Installer' Description="PTLTrader Installer"
           Manufacturer='Quantverse OU'
@@ -32,7 +32,7 @@
         <!-- Step 2: Add files to your installer package -->
         <DirectoryRef Id="APPLICATIONROOTDIRECTORY">
             <Component Id="ptltrader.exe" Guid="063f04f9-f617-4be0-a092-84d9c6ade039" Win64="yes">
-                <File Id="ptltrader.exe" Name="ptltrader.exe" Source="ptltrader-1.7.0-win64.exe" KeyPath="yes" Checksum="yes" ProcessorArchitecture="x64">
+                <File Id="ptltrader.exe" Name="ptltrader.exe" Source="ptltrader-2.0.0-win64.exe" KeyPath="yes" Checksum="yes" ProcessorArchitecture="x64">
                   
                 </File>
             </Component>

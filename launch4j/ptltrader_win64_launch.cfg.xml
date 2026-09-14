@@ -2,8 +2,8 @@
 <launch4jConfig>
   <dontWrapJar>false</dontWrapJar>
   <headerType>gui</headerType>
-  <jar>/home/karlos/Projects/ptltrader/build/libs/ptltrader-1.7.0-win64.jar</jar>
-  <outfile>/home/karlos/Projects/ptltrader/build/exe/ptltrader-1.7.0-win64.exe</outfile>
+  <jar>/home/karlos/Projects/ptltrader/build/libs/ptltrader-2.0.0-win64.jar</jar>
+  <outfile>/home/karlos/Projects/ptltrader/build/exe/ptltrader-2.0.0-win64.exe</outfile>
   <errTitle></errTitle>
   <cmdLine></cmdLine>
   <chdir>.</chdir>
