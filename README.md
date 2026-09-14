@@ -14,6 +14,8 @@ If you still have portfolios in the Pair Trading Lab Portfolio Manager, **export
 
 There is no in-application migration from the old service — the export on the PTL website and the import here are two separate, manual steps, and the export must be done while Pair Trading Lab is still running.
 
+Export **JSON**, not CSV: the CSV export is lossy and cannot be imported. The JSON file format is documented in full in [IMPORT.md](IMPORT.md), so that portfolio files can still be written or generated once the website is gone.
+
 ## Data storage
 
 PTL Trader keeps all of its own data — portfolios, strategy configuration, strategy runtime state and trade/leg history — in a local SQLite database. It belongs in your backups.
@@ -44,6 +46,7 @@ For end users, see the [PTL Trader Manual](https://wiki.pairtradinglab.com/wiki/
 
 For developers:
 
+* [IMPORT.md](IMPORT.md) — the portfolio import/export JSON file format: every field, its accepted values, and what the importer validates.
 * [ARCHITECTURE.md](ARCHITECTURE.md) — runtime topology, components, threading model and the flows that connect them.
 * [TECHNICAL.md](TECHNICAL.md) — toolchain, source layout, configuration, external interfaces, trading model reference, engine status codes, safety rules, testing and packaging.
 
