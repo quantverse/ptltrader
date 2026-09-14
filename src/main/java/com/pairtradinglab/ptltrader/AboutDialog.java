@@ -73,30 +73,30 @@ public class AboutDialog extends Dialog {
 		shell.setSize(520, 450);
 		shell.setText(getText());
 		shell.setLayout(new GridLayout(1, false));
-		
+
 		Label lblAboutImage = new Label(shell, SWT.NONE);
 		lblAboutImage.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblAboutImage.setImage(SWTResourceManager.getImage(AboutDialog.class, "/com/pairtradinglab/ptltrader/logo-smaller.png"));
-		
+
 		Label lblProductName = new Label(shell, SWT.NONE);
 		lblProductName.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		lblProductName.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductName.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
 		lblProductName.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblProductName.setText("PTL Trader");
-		
+
 		Label lblProductVersion = new Label(shell, SWT.NONE);
 		lblProductVersion.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		lblProductVersion.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductVersion.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
 		lblProductVersion.setText("Version: " + Version.getVersion());
-		
+
 		Label lblProductCopyright = new Label(shell, SWT.NONE);
 		lblProductCopyright.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		lblProductCopyright.setForeground(SWTResourceManager.getColor(SWT.COLOR_BLACK));
 		lblProductCopyright.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false, 1, 1));
-		lblProductCopyright.setText("\u00A9 2011-2023 Quantverse OÜ");
-		
+		lblProductCopyright.setText("\u00A9 2011-2026 Quantverse OÜ");
+
 		StyledText aboutText = new StyledText(shell, SWT.WRAP);
 		aboutText.setDoubleClickEnabled(false);
 		aboutText.setBottomMargin(10);
@@ -118,7 +118,7 @@ public class AboutDialog extends Dialog {
 		aboutText.setEditable(false);
 		aboutText.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, true, 1, 1));
 		aboutText.setBounds(0, 0, 69, 19);
-		
+
 		Button btnClose = new Button(shell, SWT.NONE);
 		btnClose.addSelectionListener(new SelectionAdapter() {
 			@Override
